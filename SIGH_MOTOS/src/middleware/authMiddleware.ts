@@ -33,7 +33,10 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
       id: 'dev-user-001',
       email: 'dev@sigcmotos.co',
       role: 'ADMIN',
-      permissions: ['inventory.read', 'inventory.write'],
+      permissions: [
+        'inventory.read', 'inventory.write',
+        'sales.read', 'sales.write', 'sales.admin',
+      ],
     };
     return next();
   }

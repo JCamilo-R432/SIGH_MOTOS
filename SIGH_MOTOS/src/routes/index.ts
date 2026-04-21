@@ -1,12 +1,17 @@
 import { Router } from 'express';
-import productRoutes from './productRoutes';
+import productRoutes  from './productRoutes';
+import salesRoutes    from './salesRoutes';
+import customerRoutes from './customerRoutes';
 
 const router = Router();
 
-router.use('/products', productRoutes);
+// Módulo 1 — Inventario
+router.use('/products',  productRoutes);
 
-// Aquí se montarán los módulos futuros:
-// router.use('/sales', salesRoutes);
-// router.use('/purchases', purchaseRoutes);
+// Módulo 2 — Ventas / POS
+router.use('/sales',     salesRoutes);
+router.use('/customers', customerRoutes);
+
+// Módulo 3 (futuro): router.use('/purchases', purchaseRoutes);
 
 export default router;
