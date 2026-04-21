@@ -32,6 +32,13 @@ enum SaleStatus {
   REFUNDED
 }
 
+enum PurchaseOrderStatus {
+  PENDING             // Creada, sin recibir nada
+  PARTIALLY_RECEIVED  // Se recibió parte
+  RECEIVED            // Completamente recibida
+  CANCELLED           // Cancelada (solo desde PENDING)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MÓDULO 1 — INVENTARIO
 // ═══════════════════════════════════════════════════════════════════════════
@@ -76,14 +83,14 @@ model Product {
   brand           Brand    @relation(fields: [brandId], references: [id])
   category        Category @relation(fields: [categoryId], references: [id])
 
-  nameCommercial  String
-  descriptionTech String?
+  nameCommercial   String
+  descriptionTech  String?
   compatibleModels Json    @default("[]")
-  imageKey        String?
+  imageKey         String?
 
   locationBin     String
 
-  costPriceAvg    Decimal  @default(0.00) @db.Decimal(12, 2)
+  costPriceAvg    Decimal  @default(0.00) @db.Decimal(12, 4) // 4 decimales para costo promedio ponderado
   salePriceBase   Decimal  @default(0.00) @db.Decimal(12, 2)
   taxRate         Decimal  @default(19.00) @db.Decimal(5, 2)
 
@@ -95,8 +102,9 @@ model Product {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  movements       InventoryMovement[]
-  saleItems       SaleItem[]           // ← relación con Módulo 2
+  movements           InventoryMovement[]
+  saleItems           SaleItem[]
+  purchaseOrderItems  PurchaseOrderItem[] // ← relación con Módulo 3
 
   @@index([skuInternal])
   @@index([barcodeExternal])
@@ -111,7 +119,7 @@ model InventoryMovement {
 
   type              MovementType
   quantity          Int
-  unitCostAtMoment  Decimal      @db.Decimal(12, 2)
+  unitCostAtMoment  Decimal      @db.Decimal(12, 4)
 
   referenceDoc      String?
   reason            String?
@@ -132,7 +140,6 @@ model Customer {
   name                 String
   phone                String?
   email                String?
-  // NIT o Cédula — único por cliente registrado
   identificationNumber String?  @unique
   address              String?
   isActive             Boolean  @default(true)
@@ -148,14 +155,11 @@ model Customer {
 
 model Sale {
   id             String        @id @default(cuid())
-  // Consecutivo legible: VTA-2026-00001
   saleNumber     String        @unique
 
-  // Cliente — nullable para "Cliente Genérico"
   customerId     String?
   customer       Customer?     @relation(fields: [customerId], references: [id])
 
-  // Vendedor responsable (se vinculará al modelo User en el Módulo de Auth)
   userId         String
 
   subtotal       Decimal       @db.Decimal(12, 2)
@@ -187,19 +191,101 @@ model SaleItem {
   productId String
   product   Product @relation(fields: [productId], references: [id])
 
-  // Snapshots del producto en el momento de la venta.
-  // Crítico: si el producto cambia de nombre/SKU o se elimina,
-  // la factura histórica conserva los datos originales.
   productNameSnapshot String
   skuSnapshot         String
 
   quantity        Int
   unitPrice       Decimal @db.Decimal(12, 2)
   discountPerItem Decimal @default(0.00) @db.Decimal(12, 2)
-  // (unitPrice * quantity) - discountPerItem
   lineTotal       Decimal @db.Decimal(12, 2)
 
   @@index([saleId])
   @@index([productId])
   @@map("sale_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 3 — COMPRAS Y PROVEEDORES
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Supplier {
+  id            String   @id @default(cuid())
+  name          String
+  nit           String?  @unique
+  phone         String?
+  email         String?
+  address       String?
+  contactPerson String?
+  // Condiciones de pago acordadas, ej: "30 días", "Contado", "15 días"
+  paymentTerms  String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([nit])
+  @@index([name])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id          String              @id @default(cuid())
+  // Consecutivo legible: OC-2026-00001
+  orderNumber String              @unique
+
+  supplierId  String
+  supplier    Supplier            @relation(fields: [supplierId], references: [id])
+
+  // Responsable de la compra (vinculado al módulo de Auth futuro)
+  userId      String
+
+  status      PurchaseOrderStatus @default(PENDING)
+
+  subtotal    Decimal             @db.Decimal(12, 2)
+  taxAmount   Decimal             @db.Decimal(12, 2)
+  totalAmount Decimal             @db.Decimal(12, 2)
+
+  // Fecha estimada de llegada (planificación)
+  expectedDate  DateTime?
+  // Fecha real de recepción completa (se asigna cuando status = RECEIVED)
+  receivedDate  DateTime?
+
+  notes       String?
+
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  items       PurchaseOrderItem[]
+
+  @@index([orderNumber])
+  @@index([supplierId])
+  @@index([status, createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  // Snapshot del producto al momento de crear la OC
+  productNameSnapshot String
+  skuSnapshot         String
+
+  quantityOrdered  Int
+  // Acumulado de recepciones parciales. quantityOrdered - quantityReceived = pendiente
+  quantityReceived Int     @default(0)
+
+  // Costo acordado con el proveedor para esta OC
+  unitCost  Decimal @db.Decimal(12, 4)
+  // unitCost * quantityOrdered
+  lineTotal Decimal @db.Decimal(12, 2)
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+  @@map("purchase_order_items")
 }

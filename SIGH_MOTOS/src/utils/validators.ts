@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MovementType, PaymentMethod, SaleStatus } from '@prisma/client';
+import { MovementType, PaymentMethod, SaleStatus, PurchaseOrderStatus } from '@prisma/client';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -106,33 +106,22 @@ export const searchCustomersQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
-// Ítem individual dentro de una venta
 const saleItemSchema = z.object({
   productId: z.string().min(1, 'productId requerido'),
   quantity: z.number().int().positive('La cantidad debe ser mayor a 0'),
-  // Si se omite, se usa salePriceBase del producto en BD
   unitPrice: z.number().positive().optional(),
-  // Descuento en pesos por ítem (no porcentaje)
   discountPerItem: z.number().min(0).default(0),
 });
 
 export const createSaleSchema = z.object({
-  // Si viene null/undefined → venta a Cliente Genérico
   customerId: z.string().optional(),
-
   paymentMethod: z.enum(
     Object.values(PaymentMethod) as [PaymentMethod, ...PaymentMethod[]],
     { error: `Método de pago inválido. Valores: ${Object.values(PaymentMethod).join(', ')}` },
   ),
-
-  // Descuento global en pesos aplicado sobre el subtotal
   discountAmount: z.number().min(0).default(0),
-
   notes: z.string().max(1000).optional(),
-
-  items: z
-    .array(saleItemSchema)
-    .min(1, 'La venta debe tener al menos un ítem'),
+  items: z.array(saleItemSchema).min(1, 'La venta debe tener al menos un ítem'),
 });
 
 export const listSalesQuerySchema = z.object({
@@ -158,6 +147,83 @@ export const cancelSaleSchema = z.object({
   reason: z.string().min(5).max(500),
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 3 — COMPRAS Y PROVEEDORES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const createSupplierSchema = z.object({
+  name: z.string().min(2).max(200),
+  nit: z.string().max(20).optional(),
+  phone: z.string().max(20).optional(),
+  email: z.string().email().optional(),
+  address: z.string().max(300).optional(),
+  contactPerson: z.string().max(150).optional(),
+  paymentTerms: z.string().max(100).optional(),
+});
+
+export const updateSupplierSchema = createSupplierSchema.partial();
+
+export const listSuppliersQuerySchema = z.object({
+  query: z.string().optional(),
+  isActive: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+const purchaseOrderItemSchema = z.object({
+  productId: z.string().min(1, 'productId requerido'),
+  quantityOrdered: z.number().int().positive('La cantidad debe ser mayor a 0'),
+  // Costo acordado con el proveedor; puede ser 0 si aún no está definido
+  unitCost: z.number().min(0, 'El costo no puede ser negativo'),
+});
+
+export const createPurchaseOrderSchema = z.object({
+  supplierId: z.string().min(1, 'supplierId requerido'),
+  expectedDate: z.string().datetime().optional(),
+  notes: z.string().max(1000).optional(),
+  items: z
+    .array(purchaseOrderItemSchema)
+    .min(1, 'La orden debe tener al menos un ítem'),
+});
+
+// Recepción parcial o total — cada ítem indica cuánto llegó ahora
+const receiveItemSchema = z.object({
+  purchaseOrderItemId: z.string().min(1, 'purchaseOrderItemId requerido'),
+  quantityReceived: z
+    .number()
+    .int()
+    .positive('La cantidad recibida debe ser mayor a 0'),
+});
+
+export const receivePurchaseOrderSchema = z.object({
+  items: z
+    .array(receiveItemSchema)
+    .min(1, 'Debe recibir al menos un ítem'),
+});
+
+export const listPurchaseOrdersQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  supplierId: z.string().optional(),
+  status: z
+    .enum(Object.values(PurchaseOrderStatus) as [PurchaseOrderStatus, ...PurchaseOrderStatus[]])
+    .optional(),
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+  sortBy: z
+    .string()
+    .regex(/^\w+:(asc|desc)$/, 'Formato: campo:asc|desc')
+    .optional()
+    .default('createdAt:desc'),
+});
+
+export const cancelPurchaseOrderSchema = z.object({
+  reason: z.string().min(3).max(500).optional(),
+});
+
 // ─── Tipos exportados ────────────────────────────────────────────────────────
 
 export type CreateProductInput = z.infer<typeof createProductSchema>;
@@ -171,3 +237,11 @@ export type SearchCustomersQuery = z.infer<typeof searchCustomersQuerySchema>;
 export type CreateSaleInput = z.infer<typeof createSaleSchema>;
 export type ListSalesQuery = z.infer<typeof listSalesQuerySchema>;
 export type CancelSaleInput = z.infer<typeof cancelSaleSchema>;
+
+export type CreateSupplierInput = z.infer<typeof createSupplierSchema>;
+export type UpdateSupplierInput = z.infer<typeof updateSupplierSchema>;
+export type ListSuppliersQuery = z.infer<typeof listSuppliersQuerySchema>;
+export type CreatePurchaseOrderInput = z.infer<typeof createPurchaseOrderSchema>;
+export type ReceivePurchaseOrderInput = z.infer<typeof receivePurchaseOrderSchema>;
+export type ListPurchaseOrdersQuery = z.infer<typeof listPurchaseOrdersQuerySchema>;
+export type CancelPurchaseOrderInput = z.infer<typeof cancelPurchaseOrderSchema>;

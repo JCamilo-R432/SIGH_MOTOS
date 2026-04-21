@@ -36,6 +36,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
       permissions: [
         'inventory.read', 'inventory.write',
         'sales.read', 'sales.write', 'sales.admin',
+        'purchases.read', 'purchases.write',
       ],
     };
     return next();
