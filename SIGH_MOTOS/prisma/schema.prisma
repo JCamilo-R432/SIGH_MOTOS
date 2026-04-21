@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ─────────────────────────────────────────────────────────────────
+
+enum MovementType {
+  ENTRY           // Compra / recepción de mercancía
+  EXIT            // Salida por venta o despacho
+  ADJUSTMENT_POS  // Ajuste positivo (conteo físico)
+  ADJUSTMENT_NEG  // Ajuste negativo (conteo físico)
+  MERMA           // Pérdida / daño irrecuperable
+  RETURN          // Devolución de cliente o proveedor
+}
+
+// ─── Marca del fabricante ───────────────────────────────────────────────────
+
+model Brand {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  logoUrl   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products  Product[]
+
+  @@map("brands")
+}
+
+// ─── Categoría de repuesto ──────────────────────────────────────────────────
+
+model Category {
+  id               String    @id @default(cuid())
+  name             String    @unique
+  slug             String    @unique
+  // Prefijo de 2-4 letras usado para generar el SKU automático
+  codePrefix       String    @db.VarChar(6)
+  // Margen de ganancia por defecto para esta categoría (ej: 30.00 = 30%)
+  marginPercentage Decimal   @default(30.00) @db.Decimal(5, 2)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  products         Product[]
+
+  @@map("categories")
+}
+
+// ─── Producto / repuesto ────────────────────────────────────────────────────
+
+model Product {
+  id              String   @id @default(cuid())
+
+  // Identificación
+  skuInternal     String   @unique
+  barcodeExternal String?  @unique
+  partNumberOEM   String
+
+  // Relaciones
+  brandId         String
+  categoryId      String
+  brand           Brand    @relation(fields: [brandId], references: [id])
+  category        Category @relation(fields: [categoryId], references: [id])
+
+  // Descripción comercial
+  nameCommercial  String
+  descriptionTech String?
+  // JSON: ["Bajaj Boxer 100", "Honda CG 125", ...]
+  compatibleModels Json    @default("[]")
+  imageKey        String?  // Clave S3 / almacenamiento
+
+  // Ubicación física en bodega — CRÍTICO para organización
+  locationBin     String   // Ej: "EST-A-04"
+
+  // Costos y precios
+  costPriceAvg    Decimal  @default(0.00) @db.Decimal(12, 2)
+  salePriceBase   Decimal  @default(0.00) @db.Decimal(12, 2)
+  taxRate         Decimal  @default(19.00) @db.Decimal(5, 2)
+
+  // Stock
+  stockQuantity   Int      @default(0)
+  minStockLevel   Int      @default(5)
+  maxStockLevel   Int?
+
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  movements       InventoryMovement[]
+
+  @@index([skuInternal])
+  @@index([barcodeExternal])
+  @@index([brandId, categoryId])
+  @@map("products")
+}
+
+// ─── Movimiento de inventario ───────────────────────────────────────────────
+// Registro inmutable de CADA cambio de stock para trazabilidad completa
+
+model InventoryMovement {
+  id                String       @id @default(cuid())
+  productId         String
+  product           Product      @relation(fields: [productId], references: [id])
+
+  type              MovementType
+  // Siempre positivo; el tipo determina si suma o resta
+  quantity          Int
+  // Costo unitario en el momento del movimiento (para auditoría)
+  unitCostAtMoment  Decimal      @db.Decimal(12, 2)
+
+  referenceDoc      String?      // Nro. factura, orden de compra, etc.
+  reason            String?
+  performedByUserId String?      // ID del usuario que realizó el movimiento
+
+  timestamp         DateTime     @default(now())
+
+  @@index([productId, timestamp])
+  @@map("inventory_movements")
+}
