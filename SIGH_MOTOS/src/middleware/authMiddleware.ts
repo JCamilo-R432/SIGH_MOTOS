@@ -37,6 +37,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
         'inventory.read', 'inventory.write',
         'sales.read', 'sales.write', 'sales.admin',
         'purchases.read', 'purchases.write',
+        'reports.read',
       ],
     };
     return next();

@@ -4,6 +4,7 @@ import salesRoutes         from './salesRoutes';
 import customerRoutes      from './customerRoutes';
 import purchaseOrderRoutes from './purchaseOrderRoutes';
 import supplierRoutes      from './supplierRoutes';
+import reportRoutes        from './reportRoutes';
 
 const router = Router();
 
@@ -17,5 +18,8 @@ router.use('/customers', customerRoutes);
 // Módulo 3 — Compras y Proveedores
 router.use('/purchases', purchaseOrderRoutes);
 router.use('/suppliers', supplierRoutes);
+
+// Módulo 4 — Reportes y Analítica
+router.use('/reports',   reportRoutes);
 
 export default router;
