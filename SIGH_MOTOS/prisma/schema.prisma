@@ -24,6 +24,7 @@ enum PaymentMethod {
   CARD
   TRANSFER
   MIXED
+  CREDIT  // Venta/compra a crédito — genera CxC o CxP
 }
 
 enum SaleStatus {
@@ -146,7 +147,8 @@ model Customer {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  sales Sale[]
+  sales              Sale[]
+  accountsReceivable AccountReceivable[]
 
   @@index([phone])
   @@index([identificationNumber])
@@ -174,7 +176,8 @@ model Sale {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  items          SaleItem[]
+  items             SaleItem[]
+  accountReceivable AccountReceivable?
 
   @@index([saleNumber])
   @@index([customerId])
@@ -222,7 +225,8 @@ model Supplier {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  purchaseOrders PurchaseOrder[]
+  purchaseOrders  PurchaseOrder[]
+  accountsPayable AccountPayable[]
 
   @@index([nit])
   @@index([name])
@@ -256,7 +260,8 @@ model PurchaseOrder {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  items       PurchaseOrderItem[]
+  items          PurchaseOrderItem[]
+  accountPayable AccountPayable?
 
   @@index([orderNumber])
   @@index([supplierId])
@@ -305,7 +310,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  auditLogs AuditLog[]
+  auditLogs             AuditLog[]
+  openedRegisters       CashRegister[]         @relation("CashRegisterOpenedBy")
+  closedRegisters       CashRegister[]         @relation("CashRegisterClosedBy")
+  financialTransactions FinancialTransaction[] @relation("FinTxPerformedBy")
+  paymentRecords        PaymentRecord[]        @relation("PaymentPerformedBy")
 
   @@index([email])
   @@map("users")
@@ -355,4 +364,151 @@ model AuditLog {
   @@index([entity, entityId])
   @@index([timestamp])
   @@map("audit_logs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 6 — GESTIÓN FINANCIERA, CAJA Y CUENTAS POR COBRAR/PAGAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum CashRegisterStatus {
+  OPEN
+  CLOSED
+}
+
+enum TransactionType {
+  INCOME            // Entrada genérica (ej: venta de contado)
+  EXPENSE           // Gasto operativo (luz, agua, almuerzo)
+  WITHDRAWAL        // Retiro del dueño
+  DEPOSIT           // Depósito bancario desde caja
+  PAYMENT_RECEIVED  // Abono de cliente a su deuda (CxC)
+  PAYMENT_MADE      // Pago a proveedor (CxP)
+}
+
+enum AccountStatus {
+  PENDING          // Deuda sin ningún abono
+  PARTIALLY_PAID   // Con abonos pero saldo pendiente
+  PAID             // Saldada completamente
+  OVERDUE          // Vencida (dueDate superado y no pagada)
+}
+
+model CashRegister {
+  id                     String              @id @default(cuid())
+  openedByUserId         String
+  closedByUserId         String?
+  openedBy               User                @relation("CashRegisterOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy               User?               @relation("CashRegisterClosedBy", fields: [closedByUserId], references: [id])
+
+  openingBalance         Decimal             @db.Decimal(12, 2)
+  closingBalance         Decimal?            @db.Decimal(12, 2)  // Conteo físico al cerrar
+  expectedClosingBalance Decimal?            @db.Decimal(12, 2)  // Calculado por el sistema
+  difference             Decimal?            @db.Decimal(12, 2)  // closing - expected (negativo = falta plata)
+
+  status                 CashRegisterStatus  @default(OPEN)
+  openedAt               DateTime            @default(now())
+  closedAt               DateTime?
+  notes                  String?
+
+  transactions FinancialTransaction[]
+
+  @@index([status])
+  @@index([openedByUserId])
+  @@map("cash_registers")
+}
+
+model FinancialTransaction {
+  id              String          @id @default(cuid())
+  cashRegisterId  String
+  cashRegister    CashRegister    @relation(fields: [cashRegisterId], references: [id])
+
+  type            TransactionType
+  amount          Decimal         @db.Decimal(12, 2)
+  description     String
+  category        String          // "Venta", "Pago Proveedor", "Servicios", "Retiro Dueño"
+
+  referenceType   String?         // "SALE", "PURCHASE_ORDER", "PAYMENT_RECORD"
+  referenceId     String?         // UUID del documento origen
+
+  paymentMethod   PaymentMethod   @default(CASH)
+
+  performedByUserId String
+  performedBy       User        @relation("FinTxPerformedBy", fields: [performedByUserId], references: [id])
+
+  timestamp       DateTime        @default(now())
+
+  @@index([cashRegisterId])
+  @@index([type])
+  @@index([timestamp])
+  @@map("financial_transactions")
+}
+
+model AccountReceivable {
+  id               String        @id @default(cuid())
+  saleId           String        @unique
+  sale             Sale          @relation(fields: [saleId], references: [id])
+  customerId       String
+  customer         Customer      @relation(fields: [customerId], references: [id])
+
+  totalDebt        Decimal       @db.Decimal(12, 2)
+  paidAmount       Decimal       @default(0.00) @db.Decimal(12, 2)
+  remainingBalance Decimal       @db.Decimal(12, 2)
+
+  dueDate          DateTime?
+  status           AccountStatus @default(PENDING)
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  payments         PaymentRecord[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("accounts_receivable")
+}
+
+model AccountPayable {
+  id               String        @id @default(cuid())
+  purchaseOrderId  String        @unique
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  supplierId       String
+  supplier         Supplier      @relation(fields: [supplierId], references: [id])
+
+  totalDebt        Decimal       @db.Decimal(12, 2)
+  paidAmount       Decimal       @default(0.00) @db.Decimal(12, 2)
+  remainingBalance Decimal       @db.Decimal(12, 2)
+
+  dueDate          DateTime?
+  status           AccountStatus @default(PENDING)
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  payments         PaymentRecord[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("accounts_payable")
+}
+
+model PaymentRecord {
+  id                   String             @id @default(cuid())
+  accountReceivableId  String?
+  accountReceivable    AccountReceivable? @relation(fields: [accountReceivableId], references: [id])
+  accountPayableId     String?
+  accountPayable       AccountPayable?    @relation(fields: [accountPayableId], references: [id])
+
+  amount               Decimal            @db.Decimal(12, 2)
+  paymentMethod        PaymentMethod      @default(CASH)
+  referenceDoc         String?            // Número de comprobante / recibo
+  note                 String?
+
+  performedByUserId    String
+  performedBy          User               @relation("PaymentPerformedBy", fields: [performedByUserId], references: [id])
+
+  timestamp            DateTime           @default(now())
+
+  @@index([accountReceivableId])
+  @@index([accountPayableId])
+  @@map("payment_records")
 }

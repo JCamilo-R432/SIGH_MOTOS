@@ -22,6 +22,10 @@ export const PERMISSIONS = {
   USERS_READ:       'users.read',
   USERS_WRITE:      'users.write',
   USERS_ADMIN:      'users.admin',    // Cambiar roles, desactivar usuarios
+
+  // Finanzas y Caja
+  FINANCE_READ:     'finance.read',
+  FINANCE_WRITE:    'finance.write',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -38,6 +42,8 @@ export const ROLE_PERMISSIONS: Record<string, PermissionValue[]> = {
     PERMISSIONS.SALES_ADMIN,
     PERMISSIONS.PURCHASES_READ,
     PERMISSIONS.REPORTS_READ,
+    PERMISSIONS.FINANCE_READ,
+    PERMISSIONS.FINANCE_WRITE,
   ],
 
   SELLER: [

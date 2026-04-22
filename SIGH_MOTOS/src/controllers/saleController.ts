@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
+import { Prisma, PaymentMethod } from '@prisma/client';
 import { ZodError } from 'zod';
 import {
   createSaleSchema,
@@ -20,6 +20,9 @@ import {
   getCustomerById,
   searchCustomers,
 } from '../services/customerService';
+import { createIncomeFromSale } from '../services/financialTransactionService';
+import { createReceivableFromSale } from '../services/debtService';
+import { logAction } from '../services/auditService';
 import { logger } from '../config/logger';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -78,12 +81,28 @@ export async function createSaleHandler(req: Request, res: Response) {
     const input = createSaleSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const sale = await createSale(input, userId);
-    // TODO AUDIT: import { logAction } from '../services/auditService'
-    // void logAction(userId, 'SALE_COMPLETED', 'Sale', sale.id, {
-    //   total:      sale.totalAmount,
-    //   itemsCount: sale.items.length,
-    //   customerId: sale.customerId,
-    // }, req.ip);
+
+    const total = parseFloat(String(sale.totalAmount));
+
+    // Integración financiera — fire-and-forget (no bloquea la respuesta)
+    if (input.paymentMethod === PaymentMethod.CREDIT) {
+      if (sale.customerId) {
+        void createReceivableFromSale(sale.id, sale.customerId, total)
+          .catch((err: unknown) => logger.error('[saleController] Error al crear CxC', err));
+      }
+    } else {
+      void createIncomeFromSale(sale.id, total, input.paymentMethod, userId)
+        .catch((err: unknown) => logger.error('[saleController] Error al registrar ingreso en caja', err));
+    }
+
+    // Auditoría
+    void logAction(userId, 'SALE_COMPLETED', 'Sale', sale.id, {
+      total:         total,
+      paymentMethod: input.paymentMethod,
+      itemsCount:    sale.items.length,
+      customerId:    sale.customerId,
+    }, req.ip);
+
     return ok(res, sale, 201);
   } catch (err) {
     return handleError(res, err, 'createSale');

@@ -24,6 +24,7 @@ import {
   getPurchaseOrders,
   OverreceiptError,
 } from '../services/purchaseOrderService';
+import { createPayableFromPurchase } from '../services/debtService';
 import { logger } from '../config/logger';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -146,10 +147,16 @@ export async function receivePurchaseOrderHandler(req: Request, res: Response) {
     const input = receivePurchaseOrderSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const po = await receivePurchaseOrder(id, input, userId);
-    // TODO AUDIT: void logAction(userId, 'PURCHASE_RECEIVED', 'PurchaseOrder', id, {
-    //   status:   po.status,
-    //   received: input.items,
-    // }, req.ip);
+
+    // Si se envía isCredit=true en el body, crea CxP automáticamente
+    const body = req.body as Record<string, unknown>;
+    if (body['isCredit'] === true && po.status !== 'CANCELLED') {
+      const dueDate = typeof body['dueDate'] === 'string' ? new Date(body['dueDate']) : undefined;
+      void createPayableFromPurchase(
+        po.id, po.supplierId, parseFloat(String(po.totalAmount)), dueDate,
+      ).catch((err: unknown) => logger.error('[purchaseController] Error al crear CxP', err));
+    }
+
     return ok(res, po);
   } catch (err) {
     return handleError(res, err, 'receivePurchaseOrder');

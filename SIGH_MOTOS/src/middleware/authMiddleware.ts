@@ -57,6 +57,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
         'purchases.read',  'purchases.write',
         'reports.read',
         'users.read',      'users.write',      'users.admin',
+        'finance.read',    'finance.write',
       ],
     };
     return next();

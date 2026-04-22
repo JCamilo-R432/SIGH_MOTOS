@@ -7,6 +7,7 @@ import supplierRoutes      from './supplierRoutes';
 import reportRoutes        from './reportRoutes';
 import authRoutes          from './authRoutes';
 import userRoutes          from './userRoutes';
+import financeRoutes       from './financeRoutes';
 import { authenticate }    from '../middleware/authMiddleware';
 
 const router = Router();
@@ -30,5 +31,8 @@ router.use('/suppliers', supplierRoutes);
 
 // Módulo 4 — Reportes y Analítica
 router.use('/reports',   reportRoutes);
+
+// Módulo 6 — Finanzas, Caja y Cartera
+router.use('/finance',   authenticate, financeRoutes);
 
 export default router;
