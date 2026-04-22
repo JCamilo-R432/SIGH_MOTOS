@@ -78,6 +78,12 @@ export async function createSaleHandler(req: Request, res: Response) {
     const input = createSaleSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const sale = await createSale(input, userId);
+    // TODO AUDIT: import { logAction } from '../services/auditService'
+    // void logAction(userId, 'SALE_COMPLETED', 'Sale', sale.id, {
+    //   total:      sale.totalAmount,
+    //   itemsCount: sale.items.length,
+    //   customerId: sale.customerId,
+    // }, req.ip);
     return ok(res, sale, 201);
   } catch (err) {
     return handleError(res, err, 'createSale');
@@ -101,6 +107,7 @@ export async function cancelSaleHandler(req: Request, res: Response) {
     const input = cancelSaleSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const result = await cancelSale(id, input, userId);
+    // TODO AUDIT: void logAction(userId, 'SALE_CANCELLED', 'Sale', id, { reason: input.reason }, req.ip);
     return ok(res, result);
   } catch (err) {
     return handleError(res, err, 'cancelSale');

@@ -289,3 +289,70 @@ model PurchaseOrderItem {
   @@index([productId])
   @@map("purchase_order_items")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 5 — USUARIOS, SEGURIDAD Y AUDITORÍA (RBAC)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id])
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  auditLogs AuditLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  description String
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  details   Json     @default("{}")
+  ipAddress String?
+  timestamp DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}

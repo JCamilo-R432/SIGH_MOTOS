@@ -128,6 +128,12 @@ export async function createPurchaseOrderHandler(req: Request, res: Response) {
     const input = createPurchaseOrderSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const po = await createPurchaseOrder(input, userId);
+    // TODO AUDIT: import { logAction } from '../services/auditService'
+    // void logAction(userId, 'CREATE_PURCHASE_ORDER', 'PurchaseOrder', po.id, {
+    //   supplierId:  po.supplierId,
+    //   total:       po.totalAmount,
+    //   itemsCount:  po.items.length,
+    // }, req.ip);
     return ok(res, po, 201);
   } catch (err) {
     return handleError(res, err, 'createPurchaseOrder');
@@ -140,6 +146,10 @@ export async function receivePurchaseOrderHandler(req: Request, res: Response) {
     const input = receivePurchaseOrderSchema.parse(req.body);
     const userId = req.user?.id ?? 'unknown';
     const po = await receivePurchaseOrder(id, input, userId);
+    // TODO AUDIT: void logAction(userId, 'PURCHASE_RECEIVED', 'PurchaseOrder', id, {
+    //   status:   po.status,
+    //   received: input.items,
+    // }, req.ip);
     return ok(res, po);
   } catch (err) {
     return handleError(res, err, 'receivePurchaseOrder');

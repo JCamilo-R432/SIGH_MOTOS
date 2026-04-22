@@ -5,8 +5,17 @@ import customerRoutes      from './customerRoutes';
 import purchaseOrderRoutes from './purchaseOrderRoutes';
 import supplierRoutes      from './supplierRoutes';
 import reportRoutes        from './reportRoutes';
+import authRoutes          from './authRoutes';
+import userRoutes          from './userRoutes';
+import { authenticate }    from '../middleware/authMiddleware';
 
 const router = Router();
+
+// Módulo 5 — Auth (público)
+router.use('/auth',      authRoutes);
+
+// Módulo 5 — Usuarios (protegido)
+router.use('/users',     authenticate, userRoutes);
 
 // Módulo 1 — Inventario
 router.use('/products',  productRoutes);

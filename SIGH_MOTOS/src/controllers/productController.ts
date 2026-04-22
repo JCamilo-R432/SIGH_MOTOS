@@ -8,6 +8,7 @@ import {
   getProductsQuerySchema,
 } from '../utils/validators';
 import * as productService from '../services/productService';
+import { logAction } from '../services/auditService';
 import { logger } from '../config/logger';
 
 // ─── Respuestas estandarizadas ────────────────────────────────────────────────
@@ -55,6 +56,12 @@ export async function createProduct(req: Request, res: Response) {
     const input = createProductSchema.parse(req.body);
     const userId = req.user?.id;
     const product = await productService.createProduct(input, userId);
+    // AUDIT — registra quién creó el producto y con qué datos básicos
+    void logAction(userId ?? null, 'CREATE_PRODUCT', 'Product', product.id, {
+      name: product.nameCommercial,
+      sku:  product.skuInternal,
+      cost: product.costPriceAvg,
+    }, req.ip);
     return ok(res, product, 201);
   } catch (err) {
     return handleError(res, err, 'createProduct');
@@ -88,6 +95,10 @@ export async function updateProduct(req: Request, res: Response) {
     const input = updateProductSchema.parse(req.body);
     const userId = req.user?.id;
     const product = await productService.updateProduct(id, input, userId);
+    // AUDIT — especialmente importante para rastrear cambios de precio
+    void logAction(userId ?? null, 'UPDATE_PRODUCT', 'Product', id, {
+      changes: input,
+    }, req.ip);
     return ok(res, product);
   } catch (err) {
     return handleError(res, err, 'updateProduct');
@@ -113,6 +124,12 @@ export async function adjustStock(req: Request, res: Response) {
     const input = adjustStockSchema.parse(req.body);
     const userId = req.user?.id;
     const result = await productService.adjustStock(id, input, userId);
+    // AUDIT — ajustes manuales de stock son de alto riesgo (posible fraude)
+    void logAction(userId ?? null, 'ADJUST_STOCK', 'Product', id, {
+      type:     input.type,
+      quantity: input.quantity,
+      reason:   input.reason,
+    }, req.ip);
     return ok(res, result);
   } catch (err) {
     return handleError(res, err, 'adjustStock');
