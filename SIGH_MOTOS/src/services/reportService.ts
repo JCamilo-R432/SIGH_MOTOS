@@ -1,6 +1,7 @@
 import { SaleStatus, PurchaseOrderStatus } from '@prisma/client';
 import { prisma } from '../config/prisma';
 import { logger } from '../config/logger';
+import ExcelJS from 'exceljs';
 import {
   getStartOfDay,
   getEndOfDay,
@@ -449,4 +450,622 @@ export async function getSupplierPerformanceReport() {
       };
     })
     .sort((a, b) => a.avgDeliveryDays - b.avgDeliveryDays);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 6 — INTELIGENCIA DE NEGOCIOS (KPIs, ABC, VALORACIÓN, EXPORTACIÓN)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Tipos exportados ─────────────────────────────────────────────────────────
+
+export interface DailyChartPoint {
+  date:  string;  // 'YYYY-MM-DD'
+  total: number;
+}
+
+export interface ProductABCItem {
+  productId:            string;
+  productName:          string;
+  sku:                  string;
+  category:             string;
+  brand:                string;
+  quantitySold:         number;
+  totalRevenue:         number;
+  cumulativePercentage: number;
+  abcClass:             'A' | 'B' | 'C';
+}
+
+export interface LowStockItem {
+  productId:                  string;
+  productName:                string;
+  sku:                        string;
+  category:                   string;
+  brand:                      string;
+  stockQuantity:               number;
+  minStockLevel:               number;
+  shortage:                    number;
+  costPriceAvg:                number;
+  estimatedReplenishmentCost:  number;
+  urgency:                    'CRITICAL' | 'WARNING';
+}
+
+export interface ExcelColumn {
+  header:  string;
+  key:     string;
+  width?:  number;
+  numFmt?: string;
+}
+
+// ─── Helpers internos ─────────────────────────────────────────────────────────
+
+/**
+ * Rellena los días sin ventas con 0 para mantener continuidad gráfica.
+ * Permite que librerías como Chart.js o Recharts dibujen líneas sin huecos.
+ */
+function fillDailyGaps(
+  rows:      Array<{ day: string; total: string }>,
+  startDate: Date,
+  endDate:   Date,
+): DailyChartPoint[] {
+  const map = new Map(rows.map(r => [r.day, parseFloat(r.total ?? '0') || 0]));
+  const result: DailyChartPoint[] = [];
+
+  const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const limit  = new Date(endDate.getFullYear(),   endDate.getMonth(),   endDate.getDate());
+
+  while (cursor <= limit) {
+    const dateStr = cursor.toISOString().split('T')[0]!;
+    result.push({ date: dateStr, total: parseFloat((map.get(dateStr) ?? 0).toFixed(2)) });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+}
+
+// ─── Dashboard Ejecutivo ──────────────────────────────────────────────────────
+
+/**
+ * KPIs para el panel ejecutivo:
+ *  - Total ventas brutas, cantidad de transacciones, ticket promedio.
+ *  - Producto más vendido (por unidades).
+ *  - Serie diaria lista para renderizar en Chart.js / Recharts.
+ */
+export async function getExecutiveDashboard(startDate: Date, endDate: Date) {
+  const [salesAgg, dailyRows, saleRefs] = await Promise.all([
+    prisma.sale.aggregate({
+      where: { status: SaleStatus.COMPLETED, createdAt: { gte: startDate, lte: endDate } },
+      _sum:   { totalAmount: true },
+      _count: { id: true },
+    }),
+    // Agrupación diaria en PostgreSQL — eficiente para rangos largos
+    prisma.$queryRaw<Array<{ day: string; total: string }>>`
+      SELECT
+        TO_CHAR(DATE_TRUNC('day', "createdAt"), 'YYYY-MM-DD') AS day,
+        CAST(SUM("totalAmount") AS NUMERIC)                   AS total
+      FROM "sales"
+      WHERE "status" = 'COMPLETED'
+        AND "createdAt" >= ${startDate}
+        AND "createdAt" <= ${endDate}
+      GROUP BY DATE_TRUNC('day', "createdAt")
+      ORDER BY day ASC
+    `,
+    prisma.sale.findMany({
+      where: { status: SaleStatus.COMPLETED, createdAt: { gte: startDate, lte: endDate } },
+      select: { id: true },
+    }),
+  ]);
+
+  const saleIds = saleRefs.map((s: { id: string }) => s.id);
+
+  const topItemsRaw = saleIds.length > 0
+    ? await prisma.saleItem.groupBy({
+        by:      ['productId'],
+        where:   { saleId: { in: saleIds } },
+        _sum:    { quantity: true, lineTotal: true },
+        orderBy: { _sum: { quantity: 'desc' } },
+        take:    5,
+      })
+    : [];
+
+  const topIds = topItemsRaw.map((p: { productId: string }) => p.productId);
+  const topDetails = topIds.length > 0
+    ? await prisma.product.findMany({
+        where:  { id: { in: topIds } },
+        select: {
+          id: true,
+          nameCommercial: true,
+          skuInternal: true,
+          category: { select: { name: true } },
+        },
+      })
+    : [];
+
+  const pMap = new Map(topDetails.map(p => [p.id, p]));
+
+  const totalSales = toFloat(salesAgg._sum.totalAmount);
+  const txCount    = salesAgg._count.id;
+  const avgTicket  = txCount > 0 ? totalSales / txCount : 0;
+  const best       = topItemsRaw[0] ? pMap.get(topItemsRaw[0].productId) : null;
+
+  logger.info(`[reportService] getExecutiveDashboard: ${txCount} ventas, $${totalSales.toFixed(2)}`);
+
+  return {
+    period: {
+      startDate: startDate.toISOString().split('T')[0],
+      endDate:   endDate.toISOString().split('T')[0],
+    },
+    kpis: {
+      totalGrossSales:    parseFloat(totalSales.toFixed(2)),
+      transactionCount:   txCount,
+      averageTicket:      parseFloat(avgTicket.toFixed(2)),
+      topSellingProduct:  best
+        ? {
+            productId:    best.id,
+            name:         best.nameCommercial,
+            sku:          best.skuInternal,
+            category:     best.category?.name ?? 'Sin Categoría',
+            quantitySold: topItemsRaw[0]._sum.quantity ?? 0,
+            totalRevenue: parseFloat(toFloat(topItemsRaw[0]._sum.lineTotal).toFixed(2)),
+          }
+        : null,
+    },
+    dailySalesChart: fillDailyGaps(dailyRows, startDate, endDate),
+    topProducts: topItemsRaw.map(item => {
+      const p = pMap.get(item.productId);
+      return {
+        productId:    item.productId,
+        name:         p?.nameCommercial ?? 'Producto Eliminado',
+        sku:          p?.skuInternal    ?? '',
+        category:     p?.category?.name ?? 'Sin Categoría',
+        quantitySold: item._sum.quantity ?? 0,
+        totalRevenue: parseFloat(toFloat(item._sum.lineTotal).toFixed(2)),
+      };
+    }),
+  };
+}
+
+// ─── Valoración de Inventario ─────────────────────────────────────────────────
+
+/**
+ * Calcula en la BD:
+ *   - Valor a Costo:  SUM(stockQuantity × costPriceAvg)
+ *   - Valor Potencial de Venta: SUM(stockQuantity × salePriceBase)
+ *   - Margen Potencial y % de margen
+ * Evita traer miles de registros a Node.js.
+ */
+export async function getInventoryValuation() {
+  const [totalsRaw, topByValueRaw] = await Promise.all([
+    prisma.$queryRaw<Array<{
+      cost_value:    string;
+      sale_value:    string;
+      total_units:   string;
+      product_count: string;
+    }>>`
+      SELECT
+        CAST(COALESCE(SUM("stockQuantity" * "costPriceAvg"),  0) AS NUMERIC) AS cost_value,
+        CAST(COALESCE(SUM("stockQuantity" * "salePriceBase"), 0) AS NUMERIC) AS sale_value,
+        COALESCE(SUM("stockQuantity"), 0)                                    AS total_units,
+        COUNT(*)                                                             AS product_count
+      FROM "products"
+      WHERE "isActive" = true AND "stockQuantity" > 0
+    `,
+    prisma.$queryRaw<Array<{
+      id:              string;
+      name_commercial: string;
+      sku_internal:    string;
+      stock_quantity:  string;
+      cost_price_avg:  string;
+      sale_price_base: string;
+      cost_value:      string;
+      sale_value:      string;
+    }>>`
+      SELECT
+        id,
+        "nameCommercial"                                         AS name_commercial,
+        "skuInternal"                                            AS sku_internal,
+        "stockQuantity"                                          AS stock_quantity,
+        CAST("costPriceAvg"  AS NUMERIC)                        AS cost_price_avg,
+        CAST("salePriceBase" AS NUMERIC)                        AS sale_price_base,
+        CAST("stockQuantity" * "costPriceAvg"  AS NUMERIC)      AS cost_value,
+        CAST("stockQuantity" * "salePriceBase" AS NUMERIC)      AS sale_value
+      FROM "products"
+      WHERE "isActive" = true AND "stockQuantity" > 0
+      ORDER BY ("stockQuantity" * "costPriceAvg") DESC
+      LIMIT 10
+    `,
+  ]);
+
+  const row        = totalsRaw[0] ?? { cost_value: '0', sale_value: '0', total_units: '0', product_count: '0' };
+  const costValue  = parseFloat(String(row.cost_value  ?? 0)) || 0;
+  const saleValue  = parseFloat(String(row.sale_value  ?? 0)) || 0;
+  const margin     = saleValue - costValue;
+
+  logger.info(`[reportService] getInventoryValuation: costo $${costValue.toFixed(2)}, venta $${saleValue.toFixed(2)}`);
+
+  return {
+    summary: {
+      costValue:               parseFloat(costValue.toFixed(2)),
+      potentialSaleValue:      parseFloat(saleValue.toFixed(2)),
+      potentialMargin:         parseFloat(margin.toFixed(2)),
+      marginPercentage:        saleValue > 0 ? parseFloat(((margin / saleValue) * 100).toFixed(2)) : 0,
+      totalUnitsInStock:       parseInt(String(row.total_units   ?? 0), 10),
+      activeProductsWithStock: parseInt(String(row.product_count ?? 0), 10),
+    },
+    topByValue: topByValueRaw.map(p => ({
+      productId:     p.id,
+      productName:   p.name_commercial,
+      sku:           p.sku_internal,
+      stockQuantity: parseInt(String(p.stock_quantity ?? 0), 10),
+      costPriceAvg:  parseFloat(String(p.cost_price_avg  ?? 0)) || 0,
+      salePriceBase: parseFloat(String(p.sale_price_base ?? 0)) || 0,
+      costValue:     parseFloat(String(p.cost_value  ?? 0)) || 0,
+      saleValue:     parseFloat(String(p.sale_value  ?? 0)) || 0,
+    })),
+  };
+}
+
+// ─── Análisis de Rotación ABC ─────────────────────────────────────────────────
+
+/**
+ * Curva ABC basada en la Ley de Pareto:
+ *   A → Productos que acumulan el  0-80% de unidades vendidas (alta rotación).
+ *   B → Siguiente 15% acumulado (80-95%) — rotación media.
+ *   C → Último 5% (>95%) — baja rotación, candidatos a revisión/liquidación.
+ *
+ * Productos sin ventas en el período se incluyen automáticamente en Clase C.
+ */
+export async function getProductRotationABC(startDate: Date, endDate: Date) {
+  const saleRefs = await prisma.sale.findMany({
+    where:  { status: SaleStatus.COMPLETED, createdAt: { gte: startDate, lte: endDate } },
+    select: { id: true },
+  });
+
+  const saleIds = saleRefs.map((s: { id: string }) => s.id);
+
+  const [soldItemsRaw, allProducts] = await Promise.all([
+    saleIds.length > 0
+      ? prisma.saleItem.groupBy({
+          by:      ['productId'],
+          where:   { saleId: { in: saleIds } },
+          _sum:    { quantity: true, lineTotal: true },
+          orderBy: { _sum: { quantity: 'desc' } },
+        })
+      : Promise.resolve([]),
+    prisma.product.findMany({
+      where:  { isActive: true },
+      select: {
+        id: true,
+        nameCommercial: true,
+        skuInternal:    true,
+        category: { select: { name: true } },
+        brand:    { select: { name: true } },
+      },
+    }),
+  ]);
+
+  const soldMap = new Map(
+    (soldItemsRaw as Array<{
+      productId: string;
+      _sum: { quantity: number | null; lineTotal: unknown };
+    }>).map(item => [
+      item.productId,
+      { quantitySold: item._sum.quantity ?? 0, totalRevenue: toFloat(item._sum.lineTotal) },
+    ]),
+  );
+
+  // Ordenar por cantidad vendida desc (productos sin ventas al final)
+  const sorted = allProducts
+    .map(p => {
+      const s = soldMap.get(p.id);
+      return {
+        productId:    p.id,
+        productName:  p.nameCommercial,
+        sku:          p.skuInternal,
+        category:     p.category?.name ?? 'Sin Categoría',
+        brand:        p.brand?.name    ?? 'Sin Marca',
+        quantitySold: s?.quantitySold ?? 0,
+        totalRevenue: s ? parseFloat(s.totalRevenue.toFixed(2)) : 0,
+      };
+    })
+    .sort((a, b) => b.quantitySold - a.quantitySold);
+
+  const totalUnits = sorted.reduce((acc, p) => acc + p.quantitySold, 0);
+
+  // Aplicar clasificación ABC acumulando porcentaje
+  let cumulative = 0;
+  const classified: ProductABCItem[] = sorted.map(p => {
+    cumulative += p.quantitySold;
+    const cumulativePercentage = totalUnits > 0
+      ? parseFloat(((cumulative / totalUnits) * 100).toFixed(2))
+      : 100;
+
+    const abcClass: 'A' | 'B' | 'C' =
+      cumulativePercentage <= 80  ? 'A' :
+      cumulativePercentage <= 95  ? 'B' : 'C';
+
+    return { ...p, cumulativePercentage, abcClass };
+  });
+
+  const countA = classified.filter(p => p.abcClass === 'A').length;
+  const countB = classified.filter(p => p.abcClass === 'B').length;
+  const countC = classified.filter(p => p.abcClass === 'C').length;
+
+  logger.info(`[reportService] ABC: A=${countA} B=${countB} C=${countC} (${classified.length} productos)`);
+
+  return {
+    summary: {
+      totalProducts:  classified.length,
+      totalUnitsSold: totalUnits,
+      classA: countA,
+      classB: countB,
+      classC: countC,
+      period: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate:   endDate.toISOString().split('T')[0],
+      },
+    },
+    products: classified,
+  };
+}
+
+// ─── Alertas de Stock Bajo ────────────────────────────────────────────────────
+
+/**
+ * Devuelve productos donde stockQuantity ≤ minStockLevel.
+ * La comparación campo-contra-campo requiere SQL raw.
+ * Incluye estimación del costo de reposición para la urgencia de compra.
+ */
+export async function getLowStockProducts(): Promise<LowStockItem[]> {
+  const rows = await prisma.$queryRaw<Array<{
+    id:              string;
+    name_commercial: string;
+    sku_internal:    string;
+    category_name:   string;
+    brand_name:      string;
+    stock_quantity:  string;
+    min_stock_level: string;
+    cost_price_avg:  string;
+  }>>`
+    SELECT
+      p.id,
+      p."nameCommercial"                          AS name_commercial,
+      p."skuInternal"                             AS sku_internal,
+      COALESCE(c.name, 'Sin Categoría')           AS category_name,
+      COALESCE(b.name, 'Sin Marca')               AS brand_name,
+      p."stockQuantity"                           AS stock_quantity,
+      p."minStockLevel"                           AS min_stock_level,
+      CAST(p."costPriceAvg" AS NUMERIC)           AS cost_price_avg
+    FROM  "products"   p
+    LEFT JOIN "categories" c ON c.id = p."categoryId"
+    LEFT JOIN "brands"     b ON b.id = p."brandId"
+    WHERE p."isActive" = true
+      AND p."stockQuantity" <= p."minStockLevel"
+    ORDER BY p."stockQuantity" ASC
+  `;
+
+  logger.info(`[reportService] getLowStockProducts: ${rows.length} alertas`);
+
+  return rows.map((r): LowStockItem => {
+    const costAvg   = parseFloat(String(r.cost_price_avg  ?? 0)) || 0;
+    const stock     = parseInt(String(r.stock_quantity  ?? 0), 10);
+    const minStock  = parseInt(String(r.min_stock_level ?? 0), 10);
+    const shortage  = Math.max(0, minStock - stock);
+    return {
+      productId:                 r.id,
+      productName:               r.name_commercial,
+      sku:                       r.sku_internal,
+      category:                  r.category_name,
+      brand:                     r.brand_name,
+      stockQuantity:              stock,
+      minStockLevel:              minStock,
+      shortage,
+      costPriceAvg:               parseFloat(costAvg.toFixed(4)),
+      estimatedReplenishmentCost: parseFloat((shortage * costAvg).toFixed(2)),
+      urgency:                    stock === 0 ? 'CRITICAL' : 'WARNING',
+    };
+  });
+}
+
+// ─── Generador de Excel (ExcelJS) ─────────────────────────────────────────────
+
+/**
+ * Genera un buffer XLSX con encabezados estilizados listos para descarga HTTP.
+ * Para < 10 000 filas (contexto PYME) el buffer en memoria es suficiente.
+ */
+export async function generateExcelBuffer(
+  rows:         Record<string, unknown>[],
+  columns:      ExcelColumn[],
+  sheetName  = 'Reporte',
+  reportTitle?: string,
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator  = 'SIGC-Motos';
+  workbook.created  = new Date();
+
+  const sheet = workbook.addWorksheet(sheetName);
+  let dataStartRow = 1;
+
+  // Título del reporte (fila 1, fusionada)
+  if (reportTitle) {
+    sheet.addRow([reportTitle]);
+    const titleRow  = sheet.getRow(1);
+    titleRow.font   = { bold: true, size: 14, color: { argb: 'FF1F4E79' } };
+    titleRow.height = 24;
+    sheet.mergeCells(1, 1, 1, columns.length);
+    sheet.addRow([]);   // fila vacía
+    dataStartRow = 3;
+  }
+
+  // Columnas y encabezados
+  sheet.columns = columns.map(col => ({
+    header: col.header,
+    key:    col.key,
+    width:  col.width ?? 18,
+  }));
+
+  // Estilo de fila de encabezados
+  const headerRow = sheet.getRow(dataStartRow);
+  headerRow.font      = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E79' } } as ExcelJS.Fill;
+  headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+  headerRow.height    = 22;
+
+  // Datos
+  rows.forEach(row => sheet.addRow(row));
+
+  // Formato numérico por columna
+  columns.forEach(col => {
+    if (col.numFmt) sheet.getColumn(col.key).numFmt = col.numFmt;
+  });
+
+  // Bordes finos en todas las celdas de datos
+  sheet.eachRow((row, idx) => {
+    if (idx < dataStartRow) return;
+    row.eachCell(cell => {
+      cell.border = {
+        top:    { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        left:   { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        bottom: { style: 'thin', color: { argb: 'FFBFBFBF' } },
+        right:  { style: 'thin', color: { argb: 'FFBFBFBF' } },
+      };
+    });
+  });
+
+  return workbook.xlsx.writeBuffer() as unknown as Promise<Buffer>;
+}
+
+// ─── Constructores de datos para exportación ──────────────────────────────────
+
+export async function buildSalesExportData(
+  startDate: Date,
+  endDate:   Date,
+): Promise<{ rows: Record<string, unknown>[]; columns: ExcelColumn[]; title: string }> {
+  const sales = await prisma.sale.findMany({
+    where:   { status: SaleStatus.COMPLETED, createdAt: { gte: startDate, lte: endDate } },
+    select:  {
+      saleNumber:    true,
+      createdAt:     true,
+      totalAmount:   true,
+      taxAmount:     true,
+      discountAmount: true,
+      paymentMethod: true,
+      customer:      { select: { name: true, identificationNumber: true } },
+      _count:        { select: { items: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const columns: ExcelColumn[] = [
+    { header: '# Venta',          key: 'saleNumber',      width: 18 },
+    { header: 'Fecha',            key: 'date',            width: 22 },
+    { header: 'Cliente',          key: 'customerName',    width: 30 },
+    { header: 'Identificación',   key: 'identification',  width: 18 },
+    { header: 'Ítems',            key: 'itemCount',       width: 8  },
+    { header: 'Descuento',        key: 'discount',        width: 14, numFmt: '#,##0.00' },
+    { header: 'Impuesto',         key: 'tax',             width: 14, numFmt: '#,##0.00' },
+    { header: 'Total',            key: 'total',           width: 16, numFmt: '#,##0.00' },
+    { header: 'Método de Pago',   key: 'paymentMethod',   width: 16 },
+  ];
+
+  const rows: Record<string, unknown>[] = sales.map(s => ({
+    saleNumber:     s.saleNumber,
+    date:           s.createdAt.toLocaleString('es-CO'),
+    customerName:   s.customer?.name            ?? 'Consumidor Final',
+    identification: s.customer?.identificationNumber ?? '',
+    itemCount:      s._count.items,
+    discount:       parseFloat(toFloat(s.discountAmount).toFixed(2)),
+    tax:            parseFloat(toFloat(s.taxAmount).toFixed(2)),
+    total:          parseFloat(toFloat(s.totalAmount).toFixed(2)),
+    paymentMethod:  s.paymentMethod,
+  }));
+
+  return { rows, columns, title: `Reporte de Ventas — ${startDate.toLocaleDateString('es-CO')} al ${endDate.toLocaleDateString('es-CO')}` };
+}
+
+export async function buildInventoryExportData(): Promise<{ rows: Record<string, unknown>[]; columns: ExcelColumn[]; title: string }> {
+  const products = await prisma.product.findMany({
+    where:   { isActive: true },
+    select:  {
+      skuInternal:    true,
+      nameCommercial: true,
+      partNumberOEM:  true,
+      stockQuantity:  true,
+      minStockLevel:  true,
+      costPriceAvg:   true,
+      salePriceBase:  true,
+      taxRate:        true,
+      category: { select: { name: true } },
+      brand:    { select: { name: true } },
+    },
+    orderBy: { nameCommercial: 'asc' },
+  });
+
+  const columns: ExcelColumn[] = [
+    { header: 'SKU',             key: 'sku',           width: 16 },
+    { header: 'Nombre',          key: 'name',          width: 36 },
+    { header: 'N° OEM',          key: 'partNumberOEM', width: 18 },
+    { header: 'Categoría',       key: 'category',      width: 22 },
+    { header: 'Marca',           key: 'brand',         width: 18 },
+    { header: 'Stock Actual',    key: 'stock',         width: 12 },
+    { header: 'Stock Mínimo',    key: 'minStock',      width: 12 },
+    { header: 'Costo Promedio',  key: 'costAvg',       width: 16, numFmt: '#,##0.0000' },
+    { header: 'Precio Venta',    key: 'salePrice',     width: 16, numFmt: '#,##0.00' },
+    { header: 'IVA %',           key: 'taxRate',       width: 8,  numFmt: '0.00' },
+    { header: 'Valor a Costo',   key: 'costValue',     width: 16, numFmt: '#,##0.00' },
+    { header: 'Valor a Precio',  key: 'saleValue',     width: 16, numFmt: '#,##0.00' },
+    { header: 'Estado Stock',    key: 'stockStatus',   width: 14 },
+  ];
+
+  const rows: Record<string, unknown>[] = products.map(p => {
+    const costAvg   = toFloat(p.costPriceAvg);
+    const salePrice = toFloat(p.salePriceBase);
+    return {
+      sku:          p.skuInternal,
+      name:         p.nameCommercial,
+      partNumberOEM: p.partNumberOEM,
+      category:     p.category?.name ?? 'Sin Categoría',
+      brand:        p.brand?.name    ?? 'Sin Marca',
+      stock:        p.stockQuantity,
+      minStock:     p.minStockLevel,
+      costAvg:      parseFloat(costAvg.toFixed(4)),
+      salePrice:    parseFloat(salePrice.toFixed(2)),
+      taxRate:      parseFloat(toFloat(p.taxRate).toFixed(2)),
+      costValue:    parseFloat((costAvg   * p.stockQuantity).toFixed(2)),
+      saleValue:    parseFloat((salePrice * p.stockQuantity).toFixed(2)),
+      stockStatus:  p.stockQuantity === 0 ? 'SIN STOCK' :
+                    p.stockQuantity <= p.minStockLevel ? 'BAJO' : 'OK',
+    };
+  });
+
+  return { rows, columns, title: `Inventario — ${new Date().toLocaleDateString('es-CO')}` };
+}
+
+export async function buildProductsRotationExportData(
+  startDate: Date,
+  endDate:   Date,
+): Promise<{ rows: Record<string, unknown>[]; columns: ExcelColumn[]; title: string }> {
+  const { products } = await getProductRotationABC(startDate, endDate);
+
+  const columns: ExcelColumn[] = [
+    { header: 'Clase ABC',         key: 'abcClass',             width: 10 },
+    { header: 'SKU',               key: 'sku',                  width: 16 },
+    { header: 'Nombre',            key: 'productName',          width: 36 },
+    { header: 'Categoría',         key: 'category',             width: 22 },
+    { header: 'Marca',             key: 'brand',                width: 18 },
+    { header: 'Unidades Vendidas', key: 'quantitySold',         width: 18 },
+    { header: 'Ingresos',          key: 'totalRevenue',         width: 18, numFmt: '#,##0.00' },
+    { header: '% Acumulado',       key: 'cumulativePercentage', width: 14, numFmt: '0.00' },
+  ];
+
+  const rows: Record<string, unknown>[] = products.map(p => ({
+    abcClass:             p.abcClass,
+    sku:                  p.sku,
+    productName:          p.productName,
+    category:             p.category,
+    brand:                p.brand,
+    quantitySold:         p.quantitySold,
+    totalRevenue:         p.totalRevenue,
+    cumulativePercentage: p.cumulativePercentage,
+  }));
+
+  return { rows, columns, title: `Rotación ABC — ${startDate.toLocaleDateString('es-CO')} al ${endDate.toLocaleDateString('es-CO')}` };
 }

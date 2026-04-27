@@ -491,6 +491,26 @@ model AccountPayable {
   @@map("accounts_payable")
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 8 — CONFIGURACIÓN DEL NEGOCIO (singleton)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model BusinessConfig {
+  id             String   @id @default("main")
+  businessName   String   @default("TALLER Y REPUESTOS CLAVIJOS MOTOS")
+  nit            String   @default("900.XXX.XXX-X")
+  address        String   @default("CRA 16 6-40 AGUACHICA CESAR")
+  phone          String   @default("3117379097")
+  email          String?
+  logoKey        String?
+  taxRate        Decimal  @default(19.00) @db.Decimal(5, 2)
+  resolutionDian String?
+  footer         String   @default("¡Gracias por su compra! Garantía según política de fábrica.")
+  updatedAt      DateTime @updatedAt
+
+  @@map("business_config")
+}
+
 model PaymentRecord {
   id                   String             @id @default(cuid())
   accountReceivableId  String?

@@ -178,6 +178,63 @@ export async function listRoles() {
   });
 }
 
+// ─── Cambiar contraseña ───────────────────────────────────────────────────────
+
+/**
+ * Verifica la contraseña actual y la reemplaza con la nueva (hasheada).
+ * Nunca expone hashes ni mensajes que permitan enumerar usuarios.
+ */
+export async function changePassword(
+  userId:      string,
+  oldPassword: string,
+  newPassword: string,
+  ipAddress?:  string,
+): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where:  { id: userId },
+    select: { id: true, email: true, password: true, isActive: true },
+  });
+
+  if (!user || !user.isActive) throw new Error('Usuario no encontrado');
+
+  const valid = await verifyPassword(oldPassword, user.password);
+  if (!valid) throw new Error('La contraseña actual es incorrecta');
+
+  if (oldPassword === newPassword) {
+    throw new Error('La nueva contraseña debe ser diferente a la actual');
+  }
+
+  const hashed = await hashPassword(newPassword);
+
+  await prisma.user.update({
+    where: { id: userId },
+    data:  { password: hashed },
+  });
+
+  await logAction(userId, 'CHANGE_PASSWORD', 'User', userId, { email: user.email }, ipAddress);
+  logger.info(`[authService] Contraseña cambiada: ${user.email}`);
+}
+
+// ─── Reactivar usuario ────────────────────────────────────────────────────────
+
+export async function reactivateUser(
+  targetUserId: string,
+  adminUserId:  string,
+  ipAddress?:   string,
+) {
+  const user = await prisma.user.update({
+    where:  { id: targetUserId },
+    data:   { isActive: true },
+    select: { id: true, email: true, name: true },
+  });
+
+  await logAction(adminUserId, 'REACTIVATE_USER', 'User', targetUserId, {
+    email: user.email,
+  }, ipAddress);
+
+  return user;
+}
+
 // ─── Seed inicial de roles y permisos ────────────────────────────────────────
 // Llamar desde prisma/seed.ts — no en producción normal.
 

@@ -9,6 +9,8 @@ import {
   receivePurchaseOrderSchema,
   listPurchaseOrdersQuerySchema,
   cancelPurchaseOrderSchema,
+  registerEntrySchema,
+  listEntriesQuerySchema,
 } from '../utils/validators';
 import {
   createSupplier,
@@ -24,7 +26,13 @@ import {
   getPurchaseOrders,
   OverreceiptError,
 } from '../services/purchaseOrderService';
+import {
+  processEntryTransaction,
+  getAllEntries,
+  getEntryById,
+} from '../services/purchaseService';
 import { createPayableFromPurchase } from '../services/debtService';
+import { logAction } from '../services/auditService';
 import { logger } from '../config/logger';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -193,5 +201,99 @@ export async function listPurchaseOrdersHandler(req: Request, res: Response) {
     return ok(res, result);
   } catch (err) {
     return handleError(res, err, 'listPurchaseOrders');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO 4 — ENTRADAS DE MERCANCÍA (Recepción Física)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/v1/purchases/entries
+ *
+ * Registra una entrada de mercancía al almacén.
+ *
+ * Flujo de negocio:
+ *  1. Valida el body con Zod (items + quantity/unitCost > 0).
+ *  2. Pre-resuelve cada ítem: busca productos existentes o valida campos
+ *     para crear uno nuevo "al vuelo" (nameCommercial + brandId + categoryId).
+ *  3. Transacción atómica:
+ *     - Genera número ENT-{AÑO}-{NNNNN}.
+ *     - Crea productos nuevos si aplica (stock 0 inicial).
+ *     - Actualiza `stockQuantity` y recalcula `costPriceAvg` (WAC) por producto.
+ *     - Crea un `InventoryMovement` tipo ENTRY por cada ítem.
+ *  4. Retorna el resumen con número de entrada, totales y detalle por ítem.
+ *
+ * @request { items: EntryItem[], notes?: string }
+ * @response 201 con EntryResult completo.
+ * @response 409 si un SKU generado para producto nuevo ya existe (P2002).
+ */
+export async function registerEntryHandler(req: Request, res: Response) {
+  try {
+    const input  = registerEntrySchema.parse(req.body);
+    const userId = req.user?.id ?? 'unknown';
+
+    const result = await processEntryTransaction(input, userId);
+
+    void logAction(userId, 'PURCHASE_ENTRY_REGISTERED', 'InventoryMovement', result.entryNumber, {
+      entryNumber:    result.entryNumber,
+      itemsProcessed: result.itemsProcessed,
+      totalValue:     result.totalValue,
+      newProducts:    result.items.filter((i) => i.wasCreated).length,
+    }, req.ip);
+
+    return ok(res, result, 201);
+  } catch (err) {
+    return handleError(res, err, 'registerEntry');
+  }
+}
+
+/**
+ * GET /api/v1/purchases/entries
+ *
+ * Lista el historial de entradas de mercancía con paginación y filtros por fecha.
+ * Muestra datos agregados: Número de Documento, Fecha, Total Ítems, Valor Total.
+ *
+ * @query page?, limit?, startDate?, endDate?
+ *
+ * @example
+ * GET /api/v1/purchases/entries?startDate=2026-01-01T00:00:00Z&limit=20
+ */
+export async function getAllEntriesHandler(req: Request, res: Response) {
+  try {
+    const query  = listEntriesQuerySchema.parse(req.query);
+    const result = await getAllEntries(query);
+    return ok(res, result);
+  } catch (err) {
+    return handleError(res, err, 'getAllEntries');
+  }
+}
+
+/**
+ * GET /api/v1/purchases/entries/:id
+ *
+ * Obtiene los detalles completos de una entrada específica.
+ * El parámetro `:id` es el número de documento (ENT-2026-00001).
+ *
+ * Retorna: lista de productos recibidos con costos unitarios, cantidades,
+ * valores por línea, y totales de la entrada.
+ *
+ * @param req.params.id - Número de entrada (ENT-{AÑO}-{NNNNN}).
+ *
+ * @example
+ * GET /api/v1/purchases/entries/ENT-2026-00001
+ */
+export async function getEntryByIdHandler(req: Request, res: Response) {
+  try {
+    const entryNumber = extractParam(req.params['id']);
+    const entry       = await getEntryById(entryNumber);
+
+    if (!entry) {
+      return fail(res, `Entrada "${entryNumber}" no encontrada`, 404);
+    }
+
+    return ok(res, entry);
+  } catch (err) {
+    return handleError(res, err, 'getEntryById');
   }
 }

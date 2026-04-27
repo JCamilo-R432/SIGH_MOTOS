@@ -1,0 +1,22 @@
+# =============================================================================
+# Crontab para SIGC-Motos — Backups automáticos de base de datos
+# =============================================================================
+# Instalar en el HOST Ubuntu (no en el contenedor Docker):
+#   sudo crontab -e
+#   Pegar las líneas sin el '#' inicial.
+#
+# Verificar que el cron está activo:
+#   sudo systemctl status cron
+#
+# Ver logs del backup:
+#   tail -f /var/log/sigc-backup.log
+# =============================================================================
+
+# Backup diario a las 2:00 AM
+0 2 * * * /opt/SIGH_MOTOS/scripts/backup-db.sh >> /var/log/sigc-backup.log 2>&1
+
+# Backup adicional a las 2:00 PM (opcional, para negocios de alto volumen)
+# 0 14 * * * /opt/SIGH_MOTOS/scripts/backup-db.sh >> /var/log/sigc-backup.log 2>&1
+
+# Rotación del log de backup (evitar que crezca indefinidamente) — cada lunes
+# 0 3 * * 1 truncate -s 0 /var/log/sigc-backup.log

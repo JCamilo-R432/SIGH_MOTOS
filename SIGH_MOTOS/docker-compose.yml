@@ -1,0 +1,140 @@
+version: '3.9'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SIGC-Motos v2.0 — Docker Compose (Producción)
+#  Dominio:   motos.quantacloud.co
+#  VPS IP:    79.143.181.220
+#  Uso:       docker compose --env-file .env.production up -d
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── 1. Base de datos PostgreSQL ──────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: sigc_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # ⚠️  Puerto 5432 NO expuesto al exterior — solo accesible desde sigc-net
+    expose:
+      - "5432"
+    networks:
+      - sigc-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sigc_user} -d ${POSTGRES_DB:-sigc_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── 2. Migraciones Prisma (one-shot) ─────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: sigc_migrate
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - sigc-net
+    restart: "no"
+
+  # ── 3. Backend API Node.js + Prisma ──────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: sigc_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      NODE_ENV:     production
+      PORT:         3000
+      JWT_SECRET:   ${JWT_SECRET}
+      APP_URL:      ${APP_URL:-https://motos.quantacloud.co}
+      BACKUP_DIR:   /backups
+    volumes:
+      - uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./backups:/backups
+    expose:
+      - "3000"
+    networks:
+      - sigc-net
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── 4. Nginx — Reverse Proxy + SSL + SPA ─────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: sigc_nginx
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - uploads:/app/uploads:ro
+      - certbot-www:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    networks:
+      - sigc-net
+
+  # ── 5. Certbot — Obtención y renovación automática de certificados SSL ────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: sigc_certbot
+    volumes:
+      - certbot-certs:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # Renovar automáticamente si el certificado expira en < 30 días
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+        while :; do
+          certbot renew --webroot --webroot-path=/var/www/certbot --quiet;
+          sleep 12h &
+          wait $${!};
+        done"
+    networks:
+      - sigc-net
+    restart: unless-stopped
+
+# ── Volúmenes persistentes ────────────────────────────────────────────────────
+volumes:
+  pgdata:
+    driver: local
+  uploads:
+    driver: local
+  certbot-www:
+    driver: local
+  certbot-certs:
+    driver: local
+
+# ── Red interna (DB nunca expuesta al exterior) ───────────────────────────────
+networks:
+  sigc-net:
+    driver: bridge
