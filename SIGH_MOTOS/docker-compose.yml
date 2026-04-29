@@ -41,7 +41,8 @@ services:
     container_name: sigc_migrate
     command: npx prisma migrate deploy
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Usar DATABASE_URL directamente desde .env.production (no interpolación POSTGRES_*)
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
       db:
         condition: service_healthy
@@ -63,7 +64,8 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Usar DATABASE_URL directamente desde .env.production (no interpolación POSTGRES_*)
+      DATABASE_URL: ${DATABASE_URL}
       NODE_ENV:     production
       PORT:         3000
       JWT_SECRET:   ${JWT_SECRET}

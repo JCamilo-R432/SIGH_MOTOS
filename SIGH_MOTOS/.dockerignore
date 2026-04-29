@@ -1,0 +1,27 @@
+# ── Entornos (NUNCA deben entrar en la imagen) ──────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Dependencias locales (se instalan dentro del contenedor) ─────────────────
+node_modules/
+frontend/node_modules/
+
+# ── Artefactos de build locales ──────────────────────────────────────────────
+dist/
+frontend/dist/
+
+# ── Logs y backups ───────────────────────────────────────────────────────────
+logs/
+*.log
+backups/
+
+# ── Git y herramientas de desarrollo ────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Editor / OS ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
