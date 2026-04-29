@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { toast } from 'sonner'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://motos.quantacloud.com/api/v1'
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://motos.quantacloud.co/api/v1'
 
 export const api = axios.create({
   baseURL: BASE_URL,

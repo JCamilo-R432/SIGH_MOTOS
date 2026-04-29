@@ -7,38 +7,21 @@ export interface LoginResponse {
 }
 
 export const authService = {
-  /**
-   * POST /auth/login  (ruta canónica del backend)
-   * También acepta /security/login como fallback.
-   */
   login: async (credentials: { email: string; password: string }): Promise<LoginResponse> => {
-    try {
-      const { data } = await api.post('/auth/login', credentials)
-      // Normalize different response shapes
-      if (data.token && data.user) return data
-      if (data.data?.token && data.data?.user) return data.data
-      if (data.accessToken) return { token: data.accessToken, user: data.user ?? data.data?.user }
-      return data
-    } catch {
-      // Fallback: some deployments expose login at /security/login
-      const { data } = await api.post('/security/login', credentials)
-      if (data.token && data.user) return data
-      if (data.data?.token) return data.data
-      return data
-    }
+    const { data } = await api.post('/auth/login', credentials)
+    // Backend devuelve { success: true, data: { token, user } }
+    if (data.data?.token && data.data?.user) return data.data
+    if (data.token && data.user) return data
+    throw new Error('Respuesta de login inesperada')
   },
 
+  // GET /api/v1/auth/me — requiere token en Authorization header
   me: async (): Promise<User> => {
-    try {
-      const { data } = await api.get('/auth/me')
-      return data.user ?? data.data ?? data
-    } catch {
-      const { data } = await api.get('/security/me')
-      return data.user ?? data.data ?? data
-    }
+    const { data } = await api.get('/auth/me')
+    return data.data ?? data.user ?? data
   },
 
   changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
-    await api.post('/auth/change-password', { currentPassword, newPassword })
+    await api.post('/security/change-password', { currentPassword, newPassword })
   },
 }
