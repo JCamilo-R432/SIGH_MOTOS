@@ -50,7 +50,8 @@ export async function login(email: string, password: string, ipAddress?: string)
 
   if (!user || !user.isActive) throw new Error(INVALID_MSG);
 
-  const valid = await verifyPassword(password, user.password);
+  // .trim() protege contra hashes almacenados con newline (\n) por scripts de shell
+  const valid = await verifyPassword(password, user.password.trim());
   if (!valid) throw new Error(INVALID_MSG);
 
   const payload = buildUserPayload(user);

@@ -9,8 +9,10 @@ const router = Router();
 
 // POST /api/v1/auth/login — Pública
 router.post('/login', async (req: Request, res: Response) => {
+  let parsed: { email: string; password: string };
   try {
-    loginSchema.parse(req.body);
+    // loginSchema aplica .toLowerCase().trim() al email — usar el resultado, no req.body
+    parsed = loginSchema.parse(req.body);
   } catch (err) {
     if (err instanceof ZodError) {
       return res.status(422).json({
@@ -21,6 +23,8 @@ router.post('/login', async (req: Request, res: Response) => {
     }
     return res.status(400).json({ success: false, error: 'Solicitud malformada' });
   }
+  // Reemplazar req.body con los valores transformados por Zod
+  req.body = parsed;
   return login(req, res);
 });
 
