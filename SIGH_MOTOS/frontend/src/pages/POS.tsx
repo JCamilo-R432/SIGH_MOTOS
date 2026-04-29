@@ -134,11 +134,12 @@ export default function POS() {
       id: completedSale.invoiceId ?? '',
       invoiceNumber: completedSale.saleNumber,
       issuedAt: completedSale.createdAt,
+      createdAt: completedSale.createdAt,
       customer: completedSale.customer,
       items: completedSale.items,
-      subtotal: completedSale.subtotal,
-      taxTotal: completedSale.taxTotal,
-      total: completedSale.total,
+      subtotal: Number(completedSale.subtotal ?? 0),
+      taxTotal: Number(completedSale.taxTotal ?? 0),
+      total: Number(completedSale.total ?? 0),
       status: 'EMITIDA' as const,
     }
     generateInvoicePDF(fakeInvoice)

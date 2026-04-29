@@ -253,8 +253,8 @@ export default function Invoices() {
                     <tr key={i} className="table-row">
                       <td className="table-td">{item.product?.name ?? item.productId}</td>
                       <td className="table-td">{item.quantity}</td>
-                      <td className="table-td">{formatCOP(item.unitPrice)}</td>
-                      <td className="table-td font-semibold">{formatCOP(item.subtotal)}</td>
+                      <td className="table-td">{formatCOP(Number(item.unitPrice))}</td>
+                      <td className="table-td font-semibold">{formatCOP(Number(item.subtotal ?? item.lineTotal ?? 0))}</td>
                     </tr>
                   ))}
                 </tbody>

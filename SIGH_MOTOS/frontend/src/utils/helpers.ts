@@ -3,12 +3,12 @@ import { twMerge } from 'tailwind-merge'
 
 export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs))
 
-export const debounce = <T extends (...args: unknown[]) => void>(fn: T, ms = 300): T => {
+export function debounce<Args extends unknown[]>(fn: (...args: Args) => void, ms = 300): (...args: Args) => void {
   let timer: ReturnType<typeof setTimeout>
-  return ((...args: unknown[]) => {
+  return (...args: Args) => {
     clearTimeout(timer)
     timer = setTimeout(() => fn(...args), ms)
-  }) as T
+  }
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

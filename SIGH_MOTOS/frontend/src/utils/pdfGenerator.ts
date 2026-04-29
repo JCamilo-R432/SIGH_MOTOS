@@ -55,9 +55,9 @@ export const generateInvoicePDF = (invoice: Invoice): void => {
   const rows = (invoice.items ?? []).map((item) => [
     item.product?.name ?? item.productId,
     item.quantity.toString(),
-    formatCOP(item.unitPrice),
-    item.discount > 0 ? formatCOP(item.discount) : '—',
-    formatCOP(item.subtotal),
+    formatCOP(Number(item.unitPrice)),
+    Number(item.discountPerItem ?? 0) > 0 ? formatCOP(Number(item.discountPerItem)) : '—',
+    formatCOP(Number(item.subtotal ?? item.lineTotal ?? 0)),
   ])
 
   autoTable(doc, {

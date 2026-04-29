@@ -82,6 +82,7 @@ export interface Customer {
   name: string
   documentType?: string
   documentNumber?: string
+  identificationNumber?: string
   phone?: string
   email?: string
   address?: string

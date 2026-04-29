@@ -182,7 +182,7 @@ export default function Dashboard() {
                       <tr key={sale.id} className="table-row">
                         <td className="table-td font-mono text-xs">{sale.saleNumber}</td>
                         <td className="table-td text-gray-500">{formatDateTime(sale.createdAt)}</td>
-                        <td className="table-td font-semibold">{formatCOP(sale.total)}</td>
+                        <td className="table-td font-semibold">{formatCOP(sale.total ?? 0)}</td>
                         <td className="table-td">
                           <span className={st.cls}>{st.label}</span>
                         </td>
