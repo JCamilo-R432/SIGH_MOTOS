@@ -23,7 +23,27 @@ router.post('/change-password',
   secCtrl.changePassword,
 );
 
-// ─── Gestión de usuarios (complementa userRoutes) ────────────────────────────
+// ─── Gestión de usuarios CRUD ────────────────────────────────────────────────
+router.get('/users',
+  authorize('users.admin'),
+  secCtrl.listUsers,
+);
+
+router.post('/users',
+  authorize('users.admin'),
+  secCtrl.createUser,
+);
+
+router.put('/users/:id',
+  authorize('users.admin'),
+  secCtrl.updateUser,
+);
+
+router.patch('/users/:id/status',
+  authorize('users.admin'),
+  secCtrl.toggleUserStatus,
+);
+
 router.patch('/users/:id/reactivate',
   authorize('users.admin'),
   secCtrl.reactivateUser,

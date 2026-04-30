@@ -18,6 +18,7 @@ import {
   generateInvoiceDocument,
   cancelInvoice,
 } from '../services/invoiceService';
+import { prisma }    from '../config/prisma';
 import { logAction } from '../services/auditService';
 import { logger }   from '../config/logger';
 
@@ -52,6 +53,56 @@ function handleError(res: Response, err: unknown, context: string) {
   }
 
   return fail(res, 'Error interno del servidor', 500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LISTADO DE FACTURAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function listInvoicesHandler(req: Request, res: Response) {
+  try {
+    const page       = Math.max(1, parseInt(String(req.query['page'] ?? '1')));
+    const limit      = Math.min(100, Math.max(1, parseInt(String(req.query['limit'] ?? '20'))));
+    const startDate  = req.query['startDate'] as string | undefined;
+    const endDate    = req.query['endDate']   as string | undefined;
+    const customerId = req.query['customerId'] as string | undefined;
+    const status     = req.query['status']    as string | undefined;
+
+    const where: Prisma.SaleWhereInput = {
+      ...(customerId ? { customerId } : {}),
+      ...(status     ? { status: status as Prisma.EnumSaleStatusFilter } : {}),
+      ...(startDate || endDate ? {
+        createdAt: {
+          ...(startDate ? { gte: new Date(startDate) } : {}),
+          ...(endDate   ? { lte: new Date(endDate)   } : {}),
+        },
+      } : {}),
+    };
+
+    const [invoices, total] = await Promise.all([
+      prisma.sale.findMany({
+        where,
+        skip:    (page - 1) * limit,
+        take:    limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          customer: { select: { id: true, name: true } },
+          items:    { select: { id: true, quantity: true, unitPrice: true, productId: true } },
+        },
+      }),
+      prisma.sale.count({ where }),
+    ]);
+
+    return ok(res, {
+      invoices,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    return handleError(res, err, 'listInvoices');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -22,6 +22,7 @@ import { hashPassword }        from '../utils/passwordUtils';
 import {
   changePasswordSchema,
   auditLogsQuerySchema,
+  registerSchema,
 } from '../utils/validators';
 import { logger }              from '../config/logger';
 
@@ -52,6 +53,117 @@ function handleError(res: Response, err: unknown, context: string): Response {
   }
   if (err instanceof Error) return fail(res, err.message, 400);
   return fail(res, 'Error interno del servidor', 500);
+}
+
+// ─── GET /api/v1/security/users ──────────────────────────────────────────────
+
+export async function listUsers(_req: Request, res: Response): Promise<Response> {
+  try {
+    const users = await authService.listUsers();
+    return ok(res, users);
+  } catch (err) {
+    return handleError(res, err, 'listUsers');
+  }
+}
+
+// ─── POST /api/v1/security/users ─────────────────────────────────────────────
+
+export async function createUser(req: Request, res: Response): Promise<Response> {
+  try {
+    const ipAddress = req.ip ?? req.socket.remoteAddress;
+
+    // Frontend sends role name, backend expects roleId — look up the role
+    const { name, email, password, role } = req.body as {
+      name: string; email: string; password: string; role: string;
+    };
+
+    let roleId: string = req.body.roleId;
+    if (!roleId && role) {
+      const roleRecord = await prisma.role.findFirst({ where: { name: role.toUpperCase() } });
+      if (!roleRecord) return fail(res, `Rol '${role}' no encontrado`, 404);
+      roleId = roleRecord.id;
+    }
+
+    const parsed = registerSchema.parse({ name, email, password, roleId });
+    const user = await authService.createUser(parsed, req.user!.id, ipAddress);
+    return ok(res, user, 201);
+  } catch (err) {
+    return handleError(res, err, 'createUser');
+  }
+}
+
+// ─── PUT /api/v1/security/users/:id ─────────────────────────────────────────
+
+export async function updateUser(req: Request, res: Response): Promise<Response> {
+  try {
+    const targetId  = extractParam(req.params['id']);
+    if (!targetId) return fail(res, 'ID de usuario requerido');
+    const ipAddress = req.ip ?? req.socket.remoteAddress;
+
+    const { name, email, role, password } = req.body as {
+      name?: string; email?: string; role?: string; password?: string;
+    };
+
+    const updateData: Record<string, unknown> = {};
+    if (name)  updateData['name']  = name;
+    if (email) updateData['email'] = email.toLowerCase().trim();
+
+    if (role) {
+      const roleRecord = await prisma.role.findFirst({ where: { name: role.toUpperCase() } });
+      if (!roleRecord) return fail(res, `Rol '${role}' no encontrado`, 404);
+      updateData['roleId'] = roleRecord.id;
+    }
+
+    if (password) {
+      updateData['password'] = await hashPassword(password);
+    }
+
+    const user = await prisma.user.update({
+      where:  { id: targetId },
+      data:   updateData,
+      select: {
+        id: true, email: true, name: true, isActive: true, createdAt: true,
+        role: { select: { id: true, name: true } },
+      },
+    });
+
+    void auditService.logAction(req.user!.id, 'UPDATE_USER', 'User', targetId, {
+      fields: Object.keys(updateData).filter((k) => k !== 'password'),
+    }, ipAddress);
+
+    return ok(res, user);
+  } catch (err) {
+    return handleError(res, err, 'updateUser');
+  }
+}
+
+// ─── PATCH /api/v1/security/users/:id/status ─────────────────────────────────
+
+export async function toggleUserStatus(req: Request, res: Response): Promise<Response> {
+  try {
+    const targetId = extractParam(req.params['id']);
+    if (!targetId) return fail(res, 'ID de usuario requerido');
+
+    const { isActive } = req.body as { isActive: boolean };
+    if (typeof isActive !== 'boolean') return fail(res, 'isActive debe ser boolean', 422);
+
+    const ipAddress = req.ip ?? req.socket.remoteAddress;
+
+    const user = await prisma.user.update({
+      where:  { id: targetId },
+      data:   { isActive },
+      select: { id: true, email: true, name: true, isActive: true },
+    });
+
+    const action = isActive ? 'REACTIVATE_USER' : 'DEACTIVATE_USER';
+    void auditService.logAction(req.user!.id, action, 'User', targetId, {
+      email: user.email,
+    }, ipAddress);
+
+    return ok(res, user);
+  } catch (err) {
+    return handleError(res, err, 'toggleUserStatus');
+  }
 }
 
 // ─── POST /api/v1/security/change-password ────────────────────────────────────

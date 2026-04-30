@@ -8,6 +8,7 @@ import {
   dailySummaryQuerySchema,
 } from '../utils/validators';
 import * as treasuryService from '../services/treasuryService';
+import { prisma } from '../config/prisma';
 import { logger } from '../config/logger';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -151,5 +152,112 @@ export async function getActiveShift(req: Request, res: Response): Promise<Respo
     return ok(res, shift);
   } catch (err) {
     return handleError(res, err, 'getActiveShift');
+  }
+}
+
+// ─── GET /api/v1/treasury/cash-register ──────────────────────────────────────
+
+export async function getCashRegisters(req: Request, res: Response): Promise<Response> {
+  try {
+    const page  = Math.max(1, parseInt(String(req.query['page'] ?? '1')));
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query['limit'] ?? '20'))));
+
+    const [registers, total] = await Promise.all([
+      prisma.cashRegister.findMany({
+        skip:    (page - 1) * limit,
+        take:    limit,
+        orderBy: { openedAt: 'desc' },
+        include: {
+          openedBy: { select: { id: true, name: true } },
+          closedBy: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.cashRegister.count(),
+    ]);
+
+    return ok(res, { registers, total, page, limit, totalPages: Math.ceil(total / limit) });
+  } catch (err) {
+    return handleError(res, err, 'getCashRegisters');
+  }
+}
+
+// ─── POST /api/v1/treasury/cash-register/open (alias con campos del frontend) ─
+
+export async function openCashRegisterAlias(req: Request, res: Response): Promise<Response> {
+  try {
+    // Frontend sends { openingBalance, notes } → map to { initialBalance, notes }
+    const body = {
+      initialBalance: req.body.openingBalance ?? req.body.initialBalance ?? 0,
+      notes:          req.body.notes,
+    };
+    const data = openCashShiftSchema.parse(body);
+    const register = await treasuryService.openCashShift(
+      req.user!.id,
+      parseFloat(data.initialBalance),
+      data.notes,
+    );
+    return ok(res, register, 201);
+  } catch (err) {
+    return handleError(res, err, 'openCashRegisterAlias');
+  }
+}
+
+// ─── POST /api/v1/treasury/cash-register/:id/close (alias con campos del frontend)
+
+export async function closeCashRegisterAlias(req: Request, res: Response): Promise<Response> {
+  try {
+    // Frontend sends { actualBalance, notes } → map to { physicalCount, observations }
+    const body = {
+      physicalCount: req.body.actualBalance ?? req.body.physicalCount ?? 0,
+      observations:  req.body.notes ?? req.body.observations,
+    };
+    const data = closeCashShiftSchema.parse(body);
+    const result = await treasuryService.closeCashShift(
+      req.user!.id,
+      parseFloat(data.physicalCount),
+      data.observations,
+    );
+    return ok(res, result);
+  } catch (err) {
+    return handleError(res, err, 'closeCashRegisterAlias');
+  }
+}
+
+// ─── GET /api/v1/treasury/transactions ───────────────────────────────────────
+
+export async function getTransactions(req: Request, res: Response): Promise<Response> {
+  try {
+    const cashRegisterId = req.query['cashRegisterId'] as string | undefined;
+    const page  = Math.max(1, parseInt(String(req.query['page'] ?? '1')));
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query['limit'] ?? '50'))));
+
+    const where: Prisma.FinancialTransactionWhereInput = {};
+
+    if (cashRegisterId) {
+      where.cashRegisterId = cashRegisterId;
+    } else {
+      // Default: transactions from the user's active shift
+      const activeShift = await treasuryService.getActiveShiftForUser(req.user!.id);
+      if (activeShift) {
+        where.cashRegisterId = activeShift.id;
+      } else {
+        return ok(res, { transactions: [], total: 0, page, limit, totalPages: 0 });
+      }
+    }
+
+    const [transactions, total] = await Promise.all([
+      prisma.financialTransaction.findMany({
+        where,
+        skip:    (page - 1) * limit,
+        take:    limit,
+        orderBy: { timestamp: 'desc' },
+        include: { performedBy: { select: { id: true, name: true } } },
+      }),
+      prisma.financialTransaction.count({ where }),
+    ]);
+
+    return ok(res, { transactions, total, page, limit, totalPages: Math.ceil(total / limit) });
+  } catch (err) {
+    return handleError(res, err, 'getTransactions');
   }
 }

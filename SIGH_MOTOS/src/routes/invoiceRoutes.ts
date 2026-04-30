@@ -21,6 +21,16 @@ const canRead  = [authenticate, authorize('sales.read')];
 const canAdmin = [authenticate, authorize('sales.admin')];
 
 // ═══════════════════════════════════════════════════════════════════════════
+// LISTADO DE FACTURAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/invoices
+ * Lista facturas (ventas) con paginación y filtros.
+ */
+router.get('/', ...canRead, ctrl.listInvoicesHandler);
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN DE EMPRESA
 // ─── Ruta estática declarada ANTES de /:id ───────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
