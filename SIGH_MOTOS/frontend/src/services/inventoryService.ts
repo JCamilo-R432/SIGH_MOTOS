@@ -42,20 +42,36 @@ export interface AdjustStockPayload {
 export const inventoryService = {
   getProducts: async (filters: ProductFilters = {}): Promise<PaginatedResponse<Product>> => {
     const { data } = await api.get('/inventory/products', { params: filters })
-    // Normalize: backend may return { data, total, page, limit } or array
+    // data = { success: true, data: X } where X may be array or { data: [...], meta: {...} }
     if (Array.isArray(data)) {
       return { data, total: data.length, page: 1, limit: data.length, totalPages: 1 }
     }
-    if (data.products) {
+    // Extract inner payload from standard { success, data: X } wrapper
+    const payload = (data as any)?.data ?? data
+    if (Array.isArray(payload)) {
+      return { data: payload, total: payload.length, page: 1, limit: payload.length, totalPages: 1 }
+    }
+    if (payload?.products) {
       return {
-        data: data.products,
-        total: data.total ?? data.products.length,
-        page: data.page ?? 1,
-        limit: data.limit ?? 50,
-        totalPages: data.totalPages ?? 1,
+        data: Array.isArray(payload.products) ? payload.products : [],
+        total: payload.total ?? payload.products?.length ?? 0,
+        page: payload.page ?? 1,
+        limit: payload.limit ?? 50,
+        totalPages: payload.totalPages ?? 1,
       }
     }
-    return data
+    // Handle { data: [...], meta: { total, page, limit, totalPages } }
+    if (payload?.data) {
+      const items = Array.isArray(payload.data) ? payload.data : []
+      return {
+        data:       items,
+        total:      payload.meta?.total ?? payload.total ?? items.length,
+        page:       payload.meta?.page  ?? payload.page  ?? 1,
+        limit:      payload.meta?.limit ?? payload.limit ?? 50,
+        totalPages: payload.meta?.totalPages ?? payload.totalPages ?? 1,
+      }
+    }
+    return { data: [], total: 0, page: 1, limit: 50, totalPages: 0 }
   },
 
   getProduct: async (id: string): Promise<Product> => {

@@ -169,7 +169,7 @@ export const patchStockSchema = z.object({
 
 export const getProductsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(1000).default(20),
   search: z.string().optional(),
   brandId: z.string().optional(),
   categoryId: z.string().optional(),

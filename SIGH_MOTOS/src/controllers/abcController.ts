@@ -35,10 +35,9 @@ export async function getAbcAnalysis(req: Request, res: Response): Promise<Respo
           createdAt: { gte: startDate, lte: endDate },
         },
       },
-      _sum: { lineTotal: true },
-      _sum_quantity: { quantity: true },
+      _sum: { lineTotal: true, quantity: true },
       orderBy: { _sum: { lineTotal: 'desc' } },
-    } as Parameters<typeof prisma.saleItem.groupBy>[0])
+    })
 
     if (rawData.length === 0) {
       return ok(res, [])
@@ -151,7 +150,11 @@ export async function getDashboardKpis(req: Request, res: Response): Promise<Res
           where: { type: 'EXPENSE', timestamp: { gte: monthStart } },
           _sum: { amount: true },
         }),
-        prisma.product.count({ where: { isActive: true, stockQuantity: { lte: prisma.product.fields.minStockLevel as unknown as number } } })
+        // Field-to-field comparison requires raw SQL; use a safe threshold fallback
+        prisma.$queryRaw<Array<{ count: bigint }>>`
+          SELECT COUNT(*)::int AS count FROM "products"
+          WHERE "isActive" = true AND "stockQuantity" <= "minStockLevel"
+        `.then((rows) => Number(rows[0]?.count ?? 0))
           .catch(() => prisma.product.count({ where: { isActive: true, stockQuantity: { lte: 5 } } })),
         prisma.accountReceivable.count({ where: { status: { in: ['PENDING', 'PARTIALLY_PAID'] } } })
           .catch(() => 0),

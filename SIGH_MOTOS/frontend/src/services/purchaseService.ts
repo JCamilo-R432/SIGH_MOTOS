@@ -19,8 +19,18 @@ export const purchaseService = {
   getOrders: async (filters: PurchaseOrderFilters = {}): Promise<PaginatedResponse<PurchaseOrder>> => {
     const { data } = await api.get('/purchases/orders', { params: filters })
     if (Array.isArray(data)) return { data, total: data.length, page: 1, limit: data.length, totalPages: 1 }
-    if (data.orders) return { data: data.orders, total: data.total ?? data.orders.length, page: data.page ?? 1, limit: data.limit ?? 50, totalPages: data.totalPages ?? 1 }
-    return data
+    // Unwrap { success: true, data: { orders: [...], total, page, ... } }
+    const payload = (data as any)?.data ?? data
+    if (Array.isArray(payload)) return { data: payload, total: payload.length, page: 1, limit: payload.length, totalPages: 1 }
+    if (payload?.orders) {
+      const orders = Array.isArray(payload.orders) ? payload.orders : []
+      return { data: orders, total: payload.total ?? orders.length, page: payload.page ?? 1, limit: payload.limit ?? 20, totalPages: payload.totalPages ?? 1 }
+    }
+    if (payload?.data) {
+      const items = Array.isArray(payload.data) ? payload.data : []
+      return { data: items, total: payload.meta?.total ?? payload.total ?? items.length, page: payload.meta?.page ?? payload.page ?? 1, limit: payload.meta?.limit ?? payload.limit ?? 20, totalPages: payload.meta?.totalPages ?? payload.totalPages ?? 1 }
+    }
+    return { data: [], total: 0, page: 1, limit: 20, totalPages: 0 }
   },
 
   getOrder: async (id: string): Promise<PurchaseOrder> => {

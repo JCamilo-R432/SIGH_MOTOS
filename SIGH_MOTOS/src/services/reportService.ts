@@ -67,9 +67,10 @@ export async function getDashboardStats(startDate?: Date, endDate?: Date) {
         _sum: { totalAmount: true },
         _count: { id: true },
       }),
-      // Field-comparison (stockQuantity <= minStockLevel) requires raw SQL
+      // Field-comparison (stockQuantity <= minStockLevel) requires raw SQL.
+      // Table name is "products" (@@map), NOT "Product" (Prisma model name).
       prisma.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*) AS count FROM "Product"
+        SELECT COUNT(*) AS count FROM "products"
         WHERE "isActive" = true AND "stockQuantity" <= "minStockLevel"
       `,
       prisma.purchaseOrder.count({
