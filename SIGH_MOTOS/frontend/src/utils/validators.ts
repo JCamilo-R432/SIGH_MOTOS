@@ -9,7 +9,7 @@ export const productSchema = z.object({
   name: z.string().min(2, 'Nombre requerido'),
   sku: z.string().optional(),
   barcode: z.string().optional(),
-  categoryId: z.string().min(1, 'Categoría requerida'),
+  category: z.string().min(1, 'Categoría requerida'),
   brandId: z.string().optional(),
   costPrice: z.number({ invalid_type_error: 'Precio de costo requerido' }).min(0),
   salePrice: z.number({ invalid_type_error: 'Precio de venta requerido' }).min(0),

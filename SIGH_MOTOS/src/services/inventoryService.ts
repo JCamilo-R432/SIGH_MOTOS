@@ -106,6 +106,19 @@ export async function createBrand(data: CreateBrandInput) {
   });
 }
 
+/** Devuelve el ID de la marca "Genérico", creándola si no existe. */
+export async function getOrCreateGenericBrand(): Promise<string> {
+  const existing = await prisma.brand.findFirst({
+    where: { name: 'Genérico' },
+    select: { id: true },
+  });
+  if (existing) return existing.id;
+  const created = await prisma.brand.create({
+    data: { name: 'Genérico', isActive: true },
+  });
+  return created.id;
+}
+
 /**
  * Lista marcas con paginación y búsqueda por nombre.
  *

@@ -262,9 +262,57 @@ export async function deleteCategory(req: Request, res: Response) {
  * }
  * @response { success: true, data: Product & { brand, category } }
  */
+/** Maps Prisma product fields to frontend-friendly field names. */
+function serializeProduct(p: Record<string, unknown>) {
+  return {
+    id:          p['id'],
+    sku:         p['skuInternal'],
+    barcode:     p['barcodeExternal'],
+    name:        p['nameCommercial'],
+    description: p['descriptionTech'],
+    categoryId:  p['categoryId'],
+    category:    p['category'],
+    brandId:     p['brandId'],
+    brand:       p['brand'],
+    costPrice:   Number(p['costPriceAvg']),
+    salePrice:   Number(p['salePriceBase']),
+    taxRate:     Number(p['taxRate']),
+    stock:       p['stockQuantity'],
+    minStock:    p['minStockLevel'],
+    binLocation: p['locationBin'],
+    isActive:    p['isActive'],
+    createdAt:   p['createdAt'],
+    updatedAt:   p['updatedAt'],
+  };
+}
+
 export async function createProduct(req: Request, res: Response) {
   try {
-    const input = createProductSchema.parse(req.body);
+    const body = req.body as Record<string, unknown>;
+    // Resolve brandId: use provided value or find/create the "Genérico" brand
+    const resolvedBrandId: string =
+      (typeof body['brandId'] === 'string' && body['brandId'])
+        ? body['brandId']
+        : await inventoryService.getOrCreateGenericBrand();
+    // Map frontend field names → backend field names
+    const mapped = {
+      nameCommercial:   body['nameCommercial']  ?? body['name'],
+      skuInternal:      body['skuInternal']     ?? body['sku'],
+      barcodeExternal:  body['barcodeExternal'] ?? body['barcode'],
+      partNumberOEM:    body['partNumberOEM']   ?? body['name'] ?? body['nameCommercial'],
+      brandId:          resolvedBrandId,
+      categoryId:       body['categoryId'],
+      costPriceAvg:     body['costPriceAvg']    ?? body['costPrice'],
+      salePriceBase:    body['salePriceBase']   ?? body['salePrice'],
+      taxRate:          body['taxRate'],
+      stockQuantity:    body['stockQuantity']   ?? body['stock'],
+      minStockLevel:    body['minStockLevel']   ?? body['minStock'],
+      locationBin:      body['locationBin']     ?? body['binLocation'] ?? 'SIN-UBICACION',
+      descriptionTech:  body['descriptionTech'] ?? body['description'],
+      compatibleModels: body['compatibleModels'] ?? [],
+      isActive:         body['isActive']        ?? true,
+    };
+    const input = createProductSchema.parse(mapped);
     const userId = req.user?.id;
     const product = await inventoryService.createProduct(input, userId);
     void logAction(userId ?? null, 'CREATE_PRODUCT', 'Product', product.id, {
@@ -272,7 +320,7 @@ export async function createProduct(req: Request, res: Response) {
       name: product.nameCommercial,
       cost: product.costPriceAvg,
     }, req.ip);
-    return ok(res, product, 201);
+    return ok(res, serializeProduct(product as unknown as Record<string, unknown>), 201);
   } catch (err) {
     return handleError(res, err, 'createProduct');
   }
@@ -295,7 +343,10 @@ export async function getAllProducts(req: Request, res: Response) {
   try {
     const query = getProductsQuerySchema.parse(req.query);
     const result = await inventoryService.getAllProducts(query);
-    return ok(res, result);
+    return ok(res, {
+      data: result.data.map((p) => serializeProduct(p as unknown as Record<string, unknown>)),
+      meta: result.meta,
+    });
   } catch (err) {
     return handleError(res, err, 'getAllProducts');
   }
@@ -343,13 +394,32 @@ export async function getProductById(req: Request, res: Response) {
 export async function updateProduct(req: Request, res: Response) {
   try {
     const id = extractId(req.params['id']!);
-    const input = updateProductSchema.parse(req.body);
+    const body = req.body as Record<string, unknown>;
+    // Map frontend field names → backend field names (only defined values)
+    const mapped: Record<string, unknown> = {};
+    const set = (key: string, ...sources: string[]) => {
+      for (const src of sources) {
+        if (body[src] !== undefined) { mapped[key] = body[src]; return; }
+      }
+    };
+    set('nameCommercial',  'nameCommercial',  'name');
+    set('barcodeExternal', 'barcodeExternal', 'barcode');
+    set('partNumberOEM',   'partNumberOEM');
+    set('brandId',         'brandId');
+    set('categoryId',      'categoryId');
+    set('costPriceAvg',    'costPriceAvg',    'costPrice');
+    set('salePriceBase',   'salePriceBase',   'salePrice');
+    set('taxRate',         'taxRate');
+    set('stockQuantity',   'stockQuantity',   'stock');
+    set('minStockLevel',   'minStockLevel',   'minStock');
+    set('locationBin',     'locationBin',     'binLocation');
+    set('descriptionTech', 'descriptionTech', 'description');
+    set('isActive',        'isActive');
+    const input = updateProductSchema.parse(mapped);
     const userId = req.user?.id;
     const product = await inventoryService.updateProduct(id, input, userId);
-    void logAction(userId ?? null, 'UPDATE_PRODUCT', 'Product', id, {
-      changes: input,
-    }, req.ip);
-    return ok(res, product);
+    void logAction(userId ?? null, 'UPDATE_PRODUCT', 'Product', id, { changes: mapped }, req.ip);
+    return ok(res, serializeProduct(product as unknown as Record<string, unknown>));
   } catch (err) {
     return handleError(res, err, 'updateProduct');
   }

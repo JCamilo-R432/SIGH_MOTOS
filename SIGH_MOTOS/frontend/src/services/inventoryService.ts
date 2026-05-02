@@ -100,7 +100,10 @@ export const inventoryService = {
 
   getCategories: async (): Promise<Category[]> => {
     const { data } = await api.get('/inventory/categories')
-    return Array.isArray(data) ? data : data.categories ?? data.data ?? []
+    if (Array.isArray(data)) return data
+    const inner = data?.data ?? data
+    if (Array.isArray(inner)) return inner
+    return Array.isArray(inner?.data) ? inner.data : []
   },
 
   createCategory: async (name: string, description?: string): Promise<Category> => {

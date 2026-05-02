@@ -48,23 +48,11 @@ export default function Inventory() {
 
   const LIMIT = 25
 
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<ProductInput>({
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<ProductInput>({
     resolver: zodResolver(productSchema),
     defaultValues: { taxRate: 19, stock: 0, minStock: 5 },
   })
 
-  const watchedCategoryId = watch('categoryId')
-  const watchedCostPrice  = watch('costPrice')
-
-  useEffect(() => {
-    if (selectedProduct) return // no sobreescribir al editar
-    const cost = Number(watchedCostPrice)
-    if (!cost || cost <= 0 || !watchedCategoryId) return
-    const cat = categories.find((c) => c.id === watchedCategoryId)
-    if (!cat?.marginPercentage) return
-    const suggested = Math.ceil(cost * (1 + Number(cat.marginPercentage) / 100))
-    setValue('salePrice', suggested)
-  }, [watchedCostPrice, watchedCategoryId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { register: regStock, handleSubmit: handleStockSubmit, reset: resetStock, formState: { errors: stockErrors } } = useForm<AdjustStockInput>({
     resolver: zodResolver(adjustStockSchema),
@@ -107,7 +95,7 @@ export default function Inventory() {
   const openEdit = (p: Product) => {
     setSelectedProduct(p)
     reset({
-      name: p.name, sku: p.sku, barcode: p.barcode, categoryId: p.categoryId,
+      name: p.name, sku: p.sku, barcode: p.barcode, category: p.category?.name ?? '',
       brandId: p.brandId, costPrice: p.costPrice, salePrice: p.salePrice,
       taxRate: p.taxRate, stock: p.stock, minStock: p.minStock,
       binLocation: p.binLocation, description: p.description,
@@ -124,12 +112,34 @@ export default function Inventory() {
   const onSaveProduct = async (data: ProductInput) => {
     setSaving(true)
     try {
+      // Resolve free-text category name → categoryId
+      const categoryName = data.category.trim()
+      let categoryId: string
+      const existing = categories.find(
+        (c) => c.name.toLowerCase() === categoryName.toLowerCase()
+      )
+      if (existing) {
+        categoryId = existing.id
+      } else {
+        const codePrefix = categoryName
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .substring(0, 6)
+          .padEnd(2, 'X')
+        const newCat = await inventoryService.createFullCategory({ name: categoryName, codePrefix })
+        categoryId = newCat.id
+        setCategories((prev) => [...prev, newCat])
+      }
+
+      const { category: _cat, ...formData } = data
+      const payload = { ...formData, categoryId }
+
       if (selectedProduct) {
-        const updated = await inventoryService.updateProduct(selectedProduct.id, data)
+        const updated = await inventoryService.updateProduct(selectedProduct.id, payload)
         setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
         toast.success('Producto actualizado')
       } else {
-        await inventoryService.createProduct(data)
+        await inventoryService.createProduct(payload)
         toast.success('Producto creado')
         load(search, categoryFilter, lowStockFilter, 1)
         setPage(1)
@@ -361,11 +371,8 @@ export default function Inventory() {
           </div>
           <div>
             <label className="label">Categoría *</label>
-            <select className={`input-field ${errors.categoryId ? 'input-error' : ''}`} {...register('categoryId')}>
-              <option value="">Seleccionar categoría</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            {errors.categoryId && <p className="text-red-500 text-xs mt-1">{errors.categoryId.message}</p>}
+            <input className={`input-field ${errors.category ? 'input-error' : ''}`} {...register('category')} placeholder="Ej: Aceites, Filtros, Frenos..." />
+            {errors.category && <p className="text-red-500 text-xs mt-1">{errors.category.message}</p>}
           </div>
           <div>
             <label className="label">Ubicación (Bin)</label>
@@ -377,12 +384,7 @@ export default function Inventory() {
             {errors.costPrice && <p className="text-red-500 text-xs mt-1">{errors.costPrice.message}</p>}
           </div>
           <div>
-            <label className="label">
-              Precio Venta *
-              {!selectedProduct && watchedCategoryId && !!watchedCostPrice && (
-                <span className="text-blue-500 text-xs font-normal ml-1">(auto-calculado)</span>
-              )}
-            </label>
+            <label className="label">Precio Venta *</label>
             <input type="number" step="1" min="0" className={`input-field ${errors.salePrice ? 'input-error' : ''}`} {...register('salePrice', { valueAsNumber: true })} placeholder="0" />
             {errors.salePrice && <p className="text-red-500 text-xs mt-1">{errors.salePrice.message}</p>}
           </div>
