@@ -24,11 +24,23 @@ router.delete('/brands/:id', ...canWrite, ctrl.deleteBrand);
 // CATEGORÍAS  →  /api/v1/inventory/categories
 // ═══════════════════════════════════════════════════════════════════════════
 
-router.post(  '/categories',     ...canWrite, ctrl.createCategory);
-router.get(   '/categories',     ...canRead,  ctrl.getCategories);
-router.get(   '/categories/:id', ...canRead,  ctrl.getCategoryById);
-router.put(   '/categories/:id', ...canWrite, ctrl.updateCategory);
-router.delete('/categories/:id', ...canWrite, ctrl.deleteCategory);
+router.post(  '/categories',       ...canWrite, ctrl.createCategory);
+router.get(   '/categories',       ...canRead,  ctrl.getCategories);
+router.get(   '/categories/stats', ...canRead,  ctrl.getCategoriesStats); // ANTES de /:id
+router.get(   '/categories/:id',   ...canRead,  ctrl.getCategoryById);
+router.put(   '/categories/:id',   ...canWrite, ctrl.updateCategory);
+router.delete('/categories/:id',   ...canWrite, ctrl.deleteCategory);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESTADÍSTICAS GLOBALES  →  /api/v1/inventory/stats
+// ─── Declarada ANTES de /products para evitar ambigüedad de rutas.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/inventory/stats
+ * Resumen: total productos, categorías, valor, stock bajo y sin stock.
+ */
+router.get('/stats', ...canRead, ctrl.getInventoryStats);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ALERTAS  →  /api/v1/inventory/alerts

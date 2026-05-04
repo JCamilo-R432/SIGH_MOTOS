@@ -216,14 +216,40 @@ export async function deleteBrand(id: string) {
 export async function createCategory(data: CreateCategoryInput) {
   const slug = data.slug ?? slugify(data.name);
 
-  const existing = await prisma.category.findUnique({
+  // Validación case-insensitive: no permitir nombres duplicados entre categorías activas
+  const nameConflict = await prisma.category.findFirst({
+    where: { name: { equals: data.name, mode: 'insensitive' }, isActive: true },
+    select: { id: true },
+  });
+  if (nameConflict) {
+    throw new Error(`Ya existe una categoría activa con el nombre "${data.name}".`);
+  }
+
+  // Si el slug existe en una categoría inactiva, reactivarla en lugar de crear una nueva
+  const inactiveMatch = await prisma.category.findFirst({
+    where: { slug, isActive: false },
+    select: { id: true },
+  });
+  if (inactiveMatch) {
+    logger.info('[inventoryService] createCategory: reactivating inactive category', { name: data.name, slug });
+    return prisma.category.update({
+      where: { id: inactiveMatch.id },
+      data: {
+        name: data.name,
+        codePrefix: data.codePrefix,
+        marginPercentage: String(data.marginPercentage),
+        isActive: true,
+      },
+    });
+  }
+
+  // Verificar conflicto de slug en categorías activas
+  const slugConflict = await prisma.category.findUnique({
     where: { slug },
     select: { id: true },
   });
-  if (existing) {
-    throw new Error(
-      `Ya existe una categoría con el slug "${slug}". Envía un slug personalizado.`,
-    );
+  if (slugConflict) {
+    throw new Error(`Ya existe una categoría con el slug "${slug}". Envía un slug personalizado.`);
   }
 
   logger.info('[inventoryService] createCategory', { name: data.name, slug });
@@ -250,7 +276,7 @@ export async function getCategories(query: ListCategoriesQuery) {
   const skip = (page - 1) * limit;
 
   const where: Prisma.CategoryWhereInput = {
-    ...(isActive !== undefined && { isActive }),
+    isActive: isActive !== undefined ? isActive : true, // por defecto solo activas
     ...(search && {
       OR: [
         { name:        { contains: search, mode: 'insensitive' } },
@@ -304,6 +330,21 @@ export async function getCategoryById(idOrSlug: string) {
 
 /** Actualiza campos editables de una categoría. */
 export async function updateCategory(id: string, data: UpdateCategoryInput) {
+  // Validación case-insensitive: no permitir nombre duplicado en otra categoría activa
+  if (data.name !== undefined) {
+    const conflict = await prisma.category.findFirst({
+      where: {
+        name: { equals: data.name, mode: 'insensitive' },
+        isActive: true,
+        id: { not: id },
+      },
+      select: { id: true },
+    });
+    if (conflict) {
+      throw new Error(`Ya existe una categoría activa con el nombre "${data.name}".`);
+    }
+  }
+
   return prisma.category.update({
     where: { id },
     data: {
@@ -337,6 +378,89 @@ export async function deleteCategory(id: string) {
   }
 
   return prisma.category.update({ where: { id }, data: { isActive: false } });
+}
+
+/**
+ * Desactiva (soft delete) todas las categorías activas que no tengan productos activos.
+ * Se llama automáticamente al eliminar un producto.
+ * @returns Número de categorías desactivadas.
+ */
+export async function cleanupOrphanCategories(): Promise<number> {
+  const result = await prisma.category.updateMany({
+    where: {
+      isActive: true,
+      products: { none: { isActive: true } },
+    },
+    data: { isActive: false },
+  });
+  if (result.count > 0) {
+    logger.info('[inventoryService] cleanupOrphanCategories', { deactivated: result.count });
+  }
+  return result.count;
+}
+
+/**
+ * Estadísticas de categorías activas con conteo de productos activos por categoría.
+ * Útil para el dashboard de inventario.
+ */
+export async function getCategoriesStats() {
+  const categories = await prisma.category.findMany({
+    where: { isActive: true },
+    orderBy: { name: 'asc' },
+    include: {
+      _count: {
+        select: { products: { where: { isActive: true } } },
+      },
+    },
+  });
+
+  return categories.map((c) => ({
+    id:               c.id,
+    name:             c.name,
+    slug:             c.slug,
+    codePrefix:       c.codePrefix,
+    marginPercentage: Number(c.marginPercentage),
+    activeProducts:   c._count.products,
+  }));
+}
+
+/**
+ * Resumen global del inventario: totales, valor, stock bajo y sin stock.
+ * Usa raw SQL para la comparación columna-a-columna (stockQuantity <= minStockLevel).
+ */
+export async function getInventoryStats() {
+  const [
+    totalProducts,
+    totalCategories,
+    outOfStockCount,
+    lowStockResult,
+    valueResult,
+  ] = await Promise.all([
+    prisma.product.count({ where: { isActive: true } }),
+    prisma.category.count({ where: { isActive: true } }),
+    prisma.product.count({ where: { isActive: true, stockQuantity: 0 } }),
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM products
+      WHERE "isActive" = true AND "stockQuantity" <= "minStockLevel"
+    `,
+    prisma.$queryRaw<Array<{ total_value: string; total_stock: bigint }>>`
+      SELECT
+        COALESCE(SUM("costPriceAvg"::numeric * "stockQuantity"), 0)::text AS total_value,
+        COALESCE(SUM("stockQuantity"), 0)::bigint                          AS total_stock
+      FROM products
+      WHERE "isActive" = true
+    `,
+  ]);
+
+  return {
+    totalProducts,
+    totalCategories,
+    totalValue:      Number(valueResult[0]?.total_value  ?? 0),
+    totalStock:      Number(valueResult[0]?.total_stock  ?? 0),
+    lowStockCount:   Number(lowStockResult[0]?.count     ?? 0),
+    outOfStockCount,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -680,6 +804,10 @@ export async function deleteProduct(id: string) {
       : null;
 
   await prisma.product.update({ where: { id }, data: { isActive: false } });
+
+  // Limpieza automática: desactivar categorías que quedaron sin productos activos
+  await cleanupOrphanCategories();
+
   return { warning };
 }
 

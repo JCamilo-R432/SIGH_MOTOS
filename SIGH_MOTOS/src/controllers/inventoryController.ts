@@ -500,3 +500,47 @@ export async function getProductMovements(req: Request, res: Response) {
     return handleError(res, err, 'getProductMovements');
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESTADÍSTICAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/inventory/categories/stats
+ * Devuelve todas las categorías activas con el conteo de productos activos.
+ *
+ * @response { success: true, data: Array<{ id, name, slug, codePrefix, marginPercentage, activeProducts }> }
+ */
+export async function getCategoriesStats(req: Request, res: Response) {
+  try {
+    const stats = await inventoryService.getCategoriesStats();
+    return ok(res, stats);
+  } catch (err) {
+    return handleError(res, err, 'getCategoriesStats');
+  }
+}
+
+/**
+ * GET /api/v1/inventory/stats
+ * Resumen global del inventario: total productos, categorías, valor, stock bajo y sin stock.
+ *
+ * @response {
+ *   success: true,
+ *   data: {
+ *     totalProducts: number,
+ *     totalCategories: number,
+ *     totalValue: number,       // Suma de (costPriceAvg * stockQuantity) de productos activos
+ *     totalStock: number,       // Suma de unidades en stock (productos activos)
+ *     lowStockCount: number,    // Productos activos con stockQuantity <= minStockLevel
+ *     outOfStockCount: number   // Productos activos con stockQuantity = 0
+ *   }
+ * }
+ */
+export async function getInventoryStats(req: Request, res: Response) {
+  try {
+    const stats = await inventoryService.getInventoryStats();
+    return ok(res, stats);
+  } catch (err) {
+    return handleError(res, err, 'getInventoryStats');
+  }
+}

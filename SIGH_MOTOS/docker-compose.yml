@@ -103,6 +103,7 @@ services:
       - uploads:/app/uploads:ro
       - certbot-www:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
+      - ./ssl:/etc/ssl/nginx:ro
     networks:
       - sigc-net
 

@@ -49,9 +49,18 @@ if [[ "${1:-}" == "--init" ]]; then
 
   # PASO 2: Crear estructura de directorios
   log "Paso 2/8 — Creando directorios..."
-  mkdir -p nginx/conf.d uploads logs backups/db
+  mkdir -p nginx/conf.d ssl uploads logs backups/db
   chmod 700 backups/db
   ok "Directorios creados"
+
+  # PASO 2b: Generar certificado SSL autofirmado si no existe
+  if [[ ! -f "ssl/server.crt" || ! -f "ssl/server.key" ]]; then
+    log "Generando certificado SSL autofirmado..."
+    bash "${PROJECT_DIR}/scripts/generate-ssl.sh"
+    ok "Certificado SSL generado en ssl/"
+  else
+    ok "Certificado SSL ya existe en ssl/"
+  fi
 
   # PASO 3: Verificar .env.production
   log "Paso 3/8 — Verificando variables de entorno..."
@@ -74,12 +83,22 @@ if [[ "${1:-}" == "--init" ]]; then
 
   # PASO 5: Nginx temporal (HTTP only) para obtener el certificado SSL
   log "Paso 5/8 — Configurando Nginx temporal para validación Let's Encrypt..."
+  # Guardar conf HTTPS y usar temporal HTTP-only para certbot
+  cp nginx/conf.d/default.conf nginx/conf.d/default.conf.https.bak
   cat > nginx/conf.d/default.conf << 'NGINX_TMP'
 server {
     listen 80;
     server_name motos.quantacloud.co www.motos.quantacloud.co;
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 200 'SIGC-Motos v2.0 OK'; add_header Content-Type text/plain; }
+}
+# SSL stub para que nginx no falle al cargar (la conf real se restaura en Paso 7)
+server {
+    listen 443 ssl;
+    server_name _;
+    ssl_certificate     /etc/ssl/nginx/server.crt;
+    ssl_certificate_key /etc/ssl/nginx/server.key;
+    return 200 'OK';
 }
 NGINX_TMP
 
@@ -112,10 +131,34 @@ NGINX_TMP
   ok "Certificado SSL obtenido: /etc/letsencrypt/live/${DOMAIN}/"
 
   # PASO 7: Restaurar nginx.conf con HTTPS real y levantar todo
-  log "Paso 7/8 — Activando HTTPS y levantando stack completo..."
-  # La config HTTPS ya está en nginx/conf.d/default.conf (parte del repositorio)
-  # Si fue sobreescrita en el paso 5, la restauramos:
-  git checkout nginx/conf.d/default.conf 2>/dev/null || true
+  log "Paso 7/8 — Activando HTTPS con Let's Encrypt y levantando stack completo..."
+  # Restaurar conf HTTPS original
+  if [[ -f "nginx/conf.d/default.conf.https.bak" ]]; then
+    mv nginx/conf.d/default.conf.https.bak nginx/conf.d/default.conf
+  else
+    git checkout nginx/conf.d/default.conf 2>/dev/null || true
+  fi
+  # Reemplazar rutas de certs autofirmados por Let's Encrypt en la conf activa
+  sed -i \
+    "s|ssl_certificate .*server.crt;|ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;|" \
+    nginx/conf.d/default.conf
+  sed -i \
+    "s|ssl_certificate_key .*server.key;|ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;|" \
+    nginx/conf.d/default.conf
+  sed -i \
+    "s|server_name _;|server_name ${DOMAIN} www.${DOMAIN};|g" \
+    nginx/conf.d/default.conf
+  # Agregar include options-ssl si existe
+  if [[ -f "/var/lib/docker/volumes/sigc_motos_certbot-certs/_data/options-ssl-nginx.conf" ]]; then
+    sed -i \
+      "/ssl_prefer_server_ciphers/a\\    include             /etc/letsencrypt/options-ssl-nginx.conf;\\n    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;" \
+      nginx/conf.d/default.conf
+  fi
+  # Agregar HSTS (no aplica con autofirmado pero sí con Let's Encrypt)
+  sed -i \
+    "/add_header Referrer-Policy/a\\    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;" \
+    nginx/conf.d/default.conf
+  ok "Nginx configurado con Let's Encrypt"
 
   ${COMPOSE} --env-file "${ENV_FILE}" up -d --build
   log "Esperando que todos los servicios estén saludables..."
@@ -155,6 +198,14 @@ fi
 log "════════════════════════════════════════════════════════════"
 log " SIGC-Motos v2.0 — ACTUALIZACIÓN"
 log "════════════════════════════════════════════════════════════"
+
+# Asegurar que existe el certificado SSL antes de levantar nginx
+if [[ ! -f "ssl/server.crt" || ! -f "ssl/server.key" ]]; then
+  log "Generando certificado SSL autofirmado (primera vez)..."
+  mkdir -p ssl
+  bash "${PROJECT_DIR}/scripts/generate-ssl.sh"
+  ok "Certificado SSL listo"
+fi
 
 # Pull cambios
 log "Actualizando código fuente..."
