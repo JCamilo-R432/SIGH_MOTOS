@@ -36,7 +36,7 @@ export const Sidebar = () => {
 
   const allowed = navItems.filter((item) => {
     if (!item.roles) return true
-    return user && item.roles.includes(user.role)
+    return user && item.roles.map(r => r.toUpperCase()).includes((user.role || '').toUpperCase())
   })
 
   return (

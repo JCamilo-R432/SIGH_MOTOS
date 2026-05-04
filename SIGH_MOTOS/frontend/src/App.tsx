@@ -31,7 +31,7 @@ const PageLoader = () => (
 const ProtectedRoute = ({ children, roles }: { children: React.ReactNode; roles?: string[] }) => {
   const { isAuthenticated, user } = useAuthStore()
   if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (roles && user && !roles.includes(user.role)) return <Navigate to="/inventory" replace />
+  if (roles && user && !roles.map(r => r.toUpperCase()).includes((user.role || '').toUpperCase())) return <Navigate to="/inventory" replace />
   return <>{children}</>
 }
 
