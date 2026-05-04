@@ -110,7 +110,7 @@ export async function getSalesTrend(req: Request, res: Response): Promise<Respon
     }
 
     // Fill gaps
-    const trend = []
+    const trend: Array<{ date: string; total: number; count: number }> = []
     for (let i = 0; i < days; i++) {
       const d = new Date(since)
       d.setDate(d.getDate() + i)

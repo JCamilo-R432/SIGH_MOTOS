@@ -11,7 +11,8 @@ export const reportService = {
   getDashboard: async (): Promise<DashboardData> => {
     try {
       const { data } = await api.get('/reports/dashboard')
-      return data
+      // Backend wraps response: { success: true, data: DashboardData }
+      return (data as any)?.data ?? data
     } catch {
       // Fallback: compose from other endpoints
       const [kpisRes, salesRes, productsRes] = await Promise.allSettled([
@@ -20,15 +21,25 @@ export const reportService = {
         api.get('/inventory/products', { params: { lowStock: true, limit: 10 } }),
       ])
 
-      const kpis = kpisRes.status === 'fulfilled' ? kpisRes.value.data : {
+      const rawKpis = kpisRes.status === 'fulfilled' ? kpisRes.value.data : null
+      const kpisData = (rawKpis as any)?.data ?? rawKpis
+      const kpis = kpisData?.kpis ?? {
         salesToday: 0, salesMonthTotal: 0, expensesMonth: 0, lowStockCount: 0, pendingInvoices: 0,
       }
-      const recentSales = salesRes.status === 'fulfilled'
-        ? (Array.isArray(salesRes.value.data) ? salesRes.value.data : salesRes.value.data.sales ?? []).slice(0, 5)
-        : []
-      const lowStockProducts = productsRes.status === 'fulfilled'
-        ? (Array.isArray(productsRes.value.data) ? productsRes.value.data : productsRes.value.data.products ?? []).slice(0, 10)
-        : []
+
+      const rawSales = salesRes.status === 'fulfilled' ? salesRes.value.data : null
+      const salesData = (rawSales as any)?.data ?? rawSales
+      const recentSales = (Array.isArray(salesData)
+        ? salesData
+        : Array.isArray(salesData?.sales) ? salesData.sales : salesData?.data ?? []
+      ).slice(0, 5)
+
+      const rawProducts = productsRes.status === 'fulfilled' ? productsRes.value.data : null
+      const productsData = (rawProducts as any)?.data ?? rawProducts
+      const lowStockProducts = (Array.isArray(productsData)
+        ? productsData
+        : Array.isArray(productsData?.products) ? productsData.products : productsData?.data ?? []
+      ).slice(0, 10)
 
       return {
         kpis,

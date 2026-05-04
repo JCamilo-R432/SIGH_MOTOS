@@ -44,122 +44,183 @@ function mapGroupEntryToResult(entry: GroupEntry) {
   };
 }
 
-// ─── Dashboard Ejecutivo ──────────────────────────────────────────────────────
+// ─── Dashboard Principal ──────────────────────────────────────────────────────
 
-export async function getDashboardStats(startDate?: Date, endDate?: Date) {
+export async function getDashboardStats(_startDate?: Date, _endDate?: Date) {
   const now = new Date();
   const todayStart = getStartOfDay(now);
-  const todayEnd = getEndOfDay(now);
+  const todayEnd   = getEndOfDay(now);
   const monthStart = getStartOfMonth(now);
-  const monthEnd = getEndOfMonth(now);
-  const rangeStart = startDate ?? monthStart;
-  const rangeEnd = endDate ?? monthEnd;
+  const monthEnd   = getEndOfMonth(now);
 
-  const [salesTodayAgg, salesMonthAgg, lowStockRows, pendingOrdersCount, completedSaleRefs, recentSales] =
-    await Promise.all([
-      prisma.sale.aggregate({
-        where: { status: SaleStatus.COMPLETED, createdAt: { gte: todayStart, lte: todayEnd } },
-        _sum: { totalAmount: true },
-        _count: { id: true },
-      }),
-      prisma.sale.aggregate({
-        where: { status: SaleStatus.COMPLETED, createdAt: { gte: monthStart, lte: monthEnd } },
-        _sum: { totalAmount: true },
-        _count: { id: true },
-      }),
-      // Field-comparison (stockQuantity <= minStockLevel) requires raw SQL.
-      // Table name is "products" (@@map), NOT "Product" (Prisma model name).
-      prisma.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*) AS count FROM "products"
-        WHERE "isActive" = true AND "stockQuantity" <= "minStockLevel"
-      `,
-      prisma.purchaseOrder.count({
-        where: {
-          status: { in: [PurchaseOrderStatus.PENDING, PurchaseOrderStatus.PARTIALLY_RECEIVED] },
-        },
-      }),
-      prisma.sale.findMany({
-        where: { status: SaleStatus.COMPLETED, createdAt: { gte: rangeStart, lte: rangeEnd } },
-        select: { id: true },
-      }),
-      prisma.sale.findMany({
-        where: { status: SaleStatus.COMPLETED },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-        select: {
-          id: true,
-          saleNumber: true,
-          totalAmount: true,
-          paymentMethod: true,
-          createdAt: true,
-          customer: { select: { id: true, name: true } },
-          _count: { select: { items: true } },
-        },
-      }),
-    ]);
+  // Window for 30-day trend (last 30 days including today)
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
+  thirtyDaysAgo.setHours(0, 0, 0, 0);
 
-  const saleIdList = completedSaleRefs.map((s: { id: string }) => s.id);
-
-  const topProductsRaw = saleIdList.length
-    ? await prisma.saleItem.groupBy({
-        by: ['productId'],
-        where: { saleId: { in: saleIdList } },
-        _sum: { quantity: true, lineTotal: true },
-        orderBy: { _sum: { quantity: 'desc' } },
-        take: 5,
-      })
-    : [];
-
-  const productIds = topProductsRaw.map(
-    (p: { productId: string }) => p.productId,
-  );
-
-  const productDetails =
-    productIds.length > 0
-      ? await prisma.product.findMany({
-          where: { id: { in: productIds } },
-          select: { id: true, nameCommercial: true, skuInternal: true },
-        })
-      : [];
-
-  const productMap = new Map(
-    productDetails.map((p: { id: string; nameCommercial: string; skuInternal: string }) => [p.id, p]),
-  );
-
-  const topSellingProducts = topProductsRaw.map(
-    (item: { productId: string; _sum: { quantity: number | null; lineTotal: unknown } }) => ({
-      productId: item.productId,
-      productName: productMap.get(item.productId)?.nameCommercial ?? 'Producto Eliminado',
-      sku: productMap.get(item.productId)?.skuInternal ?? '',
-      quantitySold: item._sum.quantity ?? 0,
-      totalRevenue: toFloat(item._sum.lineTotal),
+  const [
+    salesTodayAgg,
+    salesMonthAgg,
+    expensesMonthAgg,
+    lowStockCountRaw,
+    recentSalesRaw,
+    salesTrendRaw,
+    categorySalesRaw,
+  ] = await Promise.all([
+    prisma.sale.aggregate({
+      where: { status: SaleStatus.COMPLETED, createdAt: { gte: todayStart, lte: todayEnd } },
+      _sum: { totalAmount: true },
+      _count: { id: true },
     }),
-  );
+    prisma.sale.aggregate({
+      where: { status: SaleStatus.COMPLETED, createdAt: { gte: monthStart, lte: monthEnd } },
+      _sum: { totalAmount: true },
+      _count: { id: true },
+    }),
+    // FinancialTransaction uses `timestamp`, NOT `createdAt`
+    prisma.financialTransaction.aggregate({
+      where: { type: 'EXPENSE', timestamp: { gte: monthStart, lte: monthEnd } },
+      _sum: { amount: true },
+    }).catch(() => ({ _sum: { amount: null } })),
+    // Field-comparison requires raw SQL (stockQuantity <= minStockLevel)
+    prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*) AS count FROM "products"
+      WHERE "isActive" = true AND "stockQuantity" <= "minStockLevel"
+    `,
+    prisma.sale.findMany({
+      where: { status: SaleStatus.COMPLETED },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: {
+        id:            true,
+        saleNumber:    true,
+        totalAmount:   true,
+        status:        true,
+        paymentMethod: true,
+        createdAt:     true,
+        customer:      { select: { id: true, name: true } },
+      },
+    }),
+    // 30-day daily sales series
+    prisma.$queryRaw<Array<{ day: string; total: string; count: string }>>`
+      SELECT
+        TO_CHAR(DATE_TRUNC('day', "createdAt"), 'YYYY-MM-DD') AS day,
+        CAST(SUM("totalAmount") AS NUMERIC)                   AS total,
+        COUNT(*)::text                                         AS count
+      FROM "sales"
+      WHERE "status" = 'COMPLETED'
+        AND "createdAt" >= ${thirtyDaysAgo}
+        AND "createdAt" <= ${now}
+      GROUP BY DATE_TRUNC('day', "createdAt")
+      ORDER BY day ASC
+    `,
+    // Category breakdown for current month
+    prisma.$queryRaw<Array<{ category: string; total: string }>>`
+      SELECT
+        COALESCE(c.name, 'Sin Categoría')    AS category,
+        CAST(SUM(si."lineTotal") AS NUMERIC) AS total
+      FROM "sale_items" si
+      JOIN "sales"    s ON s.id  = si."saleId"
+      JOIN "products" p ON p.id  = si."productId"
+      LEFT JOIN "categories" c ON c.id = p."categoryId"
+      WHERE s."status"    = 'COMPLETED'
+        AND s."createdAt" >= ${monthStart}
+        AND s."createdAt" <= ${monthEnd}
+      GROUP BY c.name
+      ORDER BY total DESC
+      LIMIT 8
+    `,
+  ]);
+
+  // Low-stock products with frontend-compatible field names
+  const lowStockProductsRaw = await prisma.$queryRaw<Array<{
+    id:              string;
+    name_commercial: string;
+    sku_internal:    string;
+    stock_quantity:  string;
+    min_stock_level: string;
+  }>>`
+    SELECT
+      id,
+      "nameCommercial" AS name_commercial,
+      "skuInternal"    AS sku_internal,
+      "stockQuantity"  AS stock_quantity,
+      "minStockLevel"  AS min_stock_level
+    FROM "products"
+    WHERE "isActive" = true
+      AND "stockQuantity" <= "minStockLevel"
+    ORDER BY "stockQuantity" ASC
+    LIMIT 10
+  `;
+
+  // Gap-filled 30-day trend
+  const trendMap = new Map(salesTrendRaw.map(r => [
+    r.day,
+    { total: parseFloat(String(r.total ?? 0)) || 0, count: parseInt(String(r.count ?? 0), 10) || 0 },
+  ]));
+  const salesTrend: Array<{ date: string; total: number; count: number }> = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(thirtyDaysAgo);
+    d.setDate(d.getDate() + i);
+    const key = d.toISOString().split('T')[0]!;
+    const entry = trendMap.get(key) ?? { total: 0, count: 0 };
+    salesTrend.push({ date: key, total: parseFloat(entry.total.toFixed(2)), count: entry.count });
+  }
+
+  // Category totals with percentage
+  const catTotals = categorySalesRaw.map(r => ({
+    category: r.category,
+    total: parseFloat(String(r.total ?? 0)) || 0,
+  }));
+  const grandCatTotal = catTotals.reduce((s, c) => s + c.total, 0);
+  const categorySales = catTotals.map(c => ({
+    category:   c.category,
+    total:      parseFloat(c.total.toFixed(2)),
+    percentage: grandCatTotal > 0
+      ? parseFloat(((c.total / grandCatTotal) * 100).toFixed(2))
+      : 0,
+  }));
+
+  const lowStockCount = Number(lowStockCountRaw[0]?.count ?? BigInt(0));
 
   logger.info('[reportService] getDashboardStats ejecutado');
 
   return {
-    today: {
-      totalSales: toFloat(salesTodayAgg._sum.totalAmount),
-      transactionCount: salesTodayAgg._count.id,
+    kpis: {
+      salesToday:      toFloat(salesTodayAgg._sum.totalAmount),
+      salesMonthTotal: toFloat(salesMonthAgg._sum.totalAmount),
+      expensesMonth:   toFloat(expensesMonthAgg._sum.amount),
+      lowStockCount,
+      pendingInvoices: 0,
     },
-    currentMonth: {
-      totalSales: toFloat(salesMonthAgg._sum.totalAmount),
-      transactionCount: salesMonthAgg._count.id,
-    },
-    inventory: {
-      lowStockCount: Number(lowStockRows[0]?.count ?? BigInt(0)),
-    },
-    purchases: { pendingOrdersCount },
-    topSellingProducts,
-    recentSales: recentSales.map((s) => ({
-      id: s.id,
-      saleNumber: s.saleNumber,
-      totalAmount: toFloat(s.totalAmount),
+    salesTrend,
+    categorySales,
+    recentSales: recentSalesRaw.map(s => ({
+      id:            s.id,
+      saleNumber:    s.saleNumber,
+      total:         toFloat(s.totalAmount),
+      totalAmount:   toFloat(s.totalAmount),
+      subtotal:      toFloat(s.totalAmount),
+      status:        s.status as 'COMPLETED' | 'CANCELLED' | 'PENDING',
       paymentMethod: s.paymentMethod,
-      itemCount: s._count.items,
-      customerName: s.customer?.name ?? 'Consumidor Final',
-      date: s.createdAt,
+      createdAt:     s.createdAt.toISOString(),
+      customer:      s.customer ?? null,
+      items:         [] as never[],
+    })),
+    lowStockProducts: lowStockProductsRaw.map(p => ({
+      id:         p.id,
+      name:       p.name_commercial,
+      sku:        p.sku_internal,
+      stock:      parseInt(String(p.stock_quantity ?? 0), 10),
+      minStock:   parseInt(String(p.min_stock_level ?? 0), 10),
+      // Minimal required fields to satisfy frontend Product interface
+      categoryId: '',
+      costPrice:  0,
+      salePrice:  0,
+      taxRate:    0,
+      isActive:   true,
+      createdAt:  '',
+      updatedAt:  '',
     })),
   };
 }
