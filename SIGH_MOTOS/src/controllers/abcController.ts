@@ -160,10 +160,14 @@ export async function getDashboardKpis(req: Request, res: Response): Promise<Res
           .catch(() => 0),
       ])
 
-    const [recentSales, lowStockProducts] = await Promise.all([
+    const [recentSalesRaw, lowStockProducts] = await Promise.all([
       prisma.sale.findMany({
         take: 5, orderBy: { createdAt: 'desc' },
-        include: { customer: { select: { name: true } }, items: { include: { product: { select: { nameCommercial: true } } } } },
+        select: {
+          id: true, saleNumber: true, totalAmount: true, status: true, createdAt: true,
+          customer: { select: { name: true } },
+          items: { select: { quantity: true, lineTotal: true, product: { select: { nameCommercial: true, skuInternal: true } } } },
+        },
       }),
       prisma.product.findMany({
         where: { isActive: true, stockQuantity: { lte: 5 } },
@@ -171,6 +175,23 @@ export async function getDashboardKpis(req: Request, res: Response): Promise<Res
         include: { category: { select: { name: true } } },
       }),
     ])
+
+    const recentSales = recentSalesRaw.map((s) => ({
+      id: s.id,
+      saleNumber: s.saleNumber,
+      total: Number(s.totalAmount),
+      status: String(s.status ?? 'COMPLETED'),
+      createdAt: s.createdAt,
+      customer: s.customer?.name ?? 'Consumidor Final',
+      items: s.items.map((i) => ({
+        product: i.product?.nameCommercial,
+        sku: i.product?.skuInternal,
+        quantity: i.quantity,
+        subtotal: Number(i.lineTotal),
+      })),
+    }))
+
+    logger.debug('[dashboard] recentSales[0]:', JSON.stringify(recentSales[0] ?? null))
 
     return ok(res, {
       kpis: {
